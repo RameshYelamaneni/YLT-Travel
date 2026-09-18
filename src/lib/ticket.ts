@@ -1,8 +1,8 @@
 /**
- * Client-side ticket/PDF + wallet pass utilities (zero external deps).
- * Generates a digital ticket with an inline QR code, a premium printable
- * ticket, and Apple Wallet (.pkpass) / Google Wallet save links.
+ * Client-side ticket/PDF + wallet pass utilities.
  */
+
+import QRCode from 'qrcode';
 
 export interface TicketData {
   pnr: string;
@@ -20,6 +20,8 @@ export interface TicketData {
   contactPhone?: string;
   features?: string[];
   boardingPoint?: string;
+  busType?: string;
+  duration?: string;
   qrData: string;
 }
 
@@ -38,7 +40,7 @@ export function buildTicket(opts: Omit<TicketData, 'qrData' | 'pnr'> & { pnr?: s
   return { ...opts, pnr, qrData };
 }
 
-const TYPE_LABEL: Record<TicketData['type'], string> = {
+export const TYPE_LABEL: Record<TicketData['type'], string> = {
   bus: 'Bus E-Ticket',
   car: 'Car Booking',
   carpool: 'Car Pool Seat',
@@ -49,17 +51,15 @@ const TYPE_LABEL: Record<TicketData['type'], string> = {
 // ---- Inline QR code generator (QR Code Model 2, byte mode, M ECC) ----
 // Minimal implementation sufficient for short PNR payloads.
 
-function qrMatrix(text: string): boolean[][] | null {
+export function qrMatrix(text: string): boolean[][] | null {
   try {
-    const data = new TextEncoder().encode(text);
-    const qr = new QRCode(0, 'M');
-    qr.addData(data);
-    qr.make();
-    const n = qr.getModuleCount();
+    const payload = text.length > 120 ? text.slice(0, 120) : text;
+    const qr = QRCode.create(payload, { errorCorrectionLevel: 'M' });
+    const n = qr.modules.size;
     const m: boolean[][] = [];
     for (let r = 0; r < n; r++) {
       m[r] = [];
-      for (let c = 0; c < n; c++) m[r][c] = qr.isDark(r, c);
+      for (let c = 0; c < n; c++) m[r][c] = Boolean(qr.modules.get(r, c));
     }
     return m;
   } catch {
@@ -80,124 +80,212 @@ function matrixToSvg(matrix: boolean[][] | null, size = 240): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" fill="#ffffff"/><g fill="#0f172a">${rects}</g></svg>`;
 }
 
-function qrSvgDataUrl(text: string, size = 240): string {
+export function qrSvgDataUrl(text: string, size = 240): string {
   const svg = matrixToSvg(qrMatrix(text), size);
   if (!svg) return '';
   return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
 }
 
-/** Opens a premium printable ticket window. The user can "Save as PDF" via the browser print dialog. */
+export function splitRoute(route: string): { from: string; to: string } {
+  const parts = route.split(/→|->| to /i).map((s) => s.trim());
+  return { from: parts[0] || route, to: parts[1] || '' };
+}
+
+export function ticketEmailHtml(ticket: TicketData, opts?: { appleUrl?: string; googleUrl?: string }): string {
+  const { from, to } = splitRoute(ticket.route);
+  const apple = opts?.appleUrl ?? '#apple-wallet';
+  const google = opts?.googleUrl ?? '#google-wallet';
+  return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0"><tr><td align="center">
+  <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #ececec">
+    <tr><td style="background:linear-gradient(135deg,#dc2626,#9f1239);padding:22px 28px;color:#fff">
+      <div style="font-size:11px;letter-spacing:2px;opacity:.85">YLT TRAVELS · CONFIRMED E-TICKET</div>
+      <div style="font-size:28px;font-weight:800;letter-spacing:3px;margin-top:8px">${esc(ticket.pnr)}</div>
+      <div style="font-size:12px;margin-top:6px">${esc(ticket.operator)} · ${esc(TYPE_LABEL[ticket.type])}</div>
+    </td></tr>
+    <tr><td style="padding:24px 28px">
+      <table width="100%"><tr>
+        <td><div style="font-size:10px;color:#6b7280;letter-spacing:1px">FROM</div><div style="font-size:20px;font-weight:800;color:#111">${esc(from)}</div><div style="font-size:18px;color:#dc2626;font-weight:700">${esc(ticket.departure)}</div></td>
+        <td align="center" style="color:#dc2626;font-size:18px">→</td>
+        <td align="right"><div style="font-size:10px;color:#6b7280;letter-spacing:1px">TO</div><div style="font-size:20px;font-weight:800;color:#111">${esc(to)}</div><div style="font-size:13px;color:#6b7280">${esc(ticket.date)}</div></td>
+      </tr></table>
+      <p style="font-size:13px;color:#374151;margin:18px 0 8px">Seats <b>${esc(ticket.seats || '—')}</b> · Total <b>₹${ticket.total}</b></p>
+      <p style="font-size:12px;color:#6b7280">Show the attached PDF QR at boarding. Arrive 15 minutes early. Valid ID required.</p>
+      <table cellpadding="0" cellspacing="0" style="margin-top:18px"><tr>
+        <td style="padding-right:8px"><a href="${apple}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;border-radius:10px;padding:12px 16px;font-size:12px;font-weight:700">Add to Apple Wallet</a></td>
+        <td><a href="${google}" style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;border-radius:10px;padding:12px 16px;font-size:12px;font-weight:700">Add to Google Wallet</a></td>
+      </tr></table>
+      <p style="font-size:11px;color:#9ca3af;margin-top:14px">iPhone: open the attached <b>.pkpass</b>. Android: open <b>.ics</b> to save the trip (Google Calendar / WalletPasses also accept the pass file).</p>
+    </td></tr>
+    <tr><td style="padding:16px 28px;background:#fafafa;font-size:11px;color:#9ca3af">YLT Travels · Tirupati, Andhra Pradesh · ylttravels.com</td></tr>
+  </table>
+  </td></tr></table>
+  </body></html>`;
+}
+
+function esc(s: string) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Printable boarding-pass preview (redBus / AbhiBus style). */
 export async function printTicket(ticket: TicketData): Promise<void> {
-  const w = window.open('', '_blank', 'width=480,height=820');
+  const w = window.open('', '_blank', 'width=720,height=980');
   if (!w) return;
   const qr = qrSvgDataUrl(ticket.qrData, 240);
   const typeLabel = TYPE_LABEL[ticket.type] ?? 'E-Ticket';
-  const [fromCity, toCity] = ticket.route.split('→').map((s) => s.trim());
-  const features = ticket.features?.length
-    ? ticket.features.map((f) => `<span style="display:inline-block;background:#fff5;border:1px solid #ffffff20;border-radius:999px;padding:3px 10px;font-size:10px;margin:2px 4px 2px 0">${f}</span>`).join('')
-    : '';
+  const { from: fromCity, to: toCity } = splitRoute(ticket.route);
 
-  w.document.write(`<!DOCTYPE html><html><head><title>YLT Ticket ${ticket.pnr}</title>
+  w.document.write(`<!DOCTYPE html><html><head><title>YLT Ticket ${esc(ticket.pnr)}</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    body { font-family:'Inter',-apple-system,Segoe UI,sans-serif; background:#0f0f12; padding:24px; color:#fff; }
-    .ticket { max-width:440px; margin:0 auto; background:linear-gradient(180deg,#1a1a20 0%,#0f0f12 100%); border-radius:24px; overflow:hidden; border:1px solid rgba(255,255,255,0.06); box-shadow:0 20px 60px rgba(0,0,0,0.5); }
-    .hero { background:linear-gradient(135deg,#e11d48 0%,#9f1239 100%); padding:28px 28px 24px; position:relative; overflow:hidden; }
-    .hero::after { content:''; position:absolute; top:-40px; right:-40px; width:160px; height:160px; border-radius:50%; background:rgba(255,255,255,0.08); }
-    .brand { display:flex; align-items:center; gap:10px; }
-    .brand .logo { width:36px; height:36px; border-radius:10px; background:rgba(255,255,255,0.15); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px; }
-    .brand h1 { font-size:18px; font-weight:800; letter-spacing:0.3px; }
-    .brand p { font-size:10px; opacity:0.85; margin-top:1px; }
-    .pnr-label { font-size:10px; opacity:0.8; margin-top:18px; text-transform:uppercase; letter-spacing:1.5px; }
-    .pnr { font-size:32px; font-weight:800; letter-spacing:4px; margin-top:2px; }
-    .type-badge { display:inline-block; background:rgba(255,255,255,0.18); border-radius:999px; padding:4px 12px; font-size:10px; font-weight:600; margin-top:10px; }
-    .route { padding:24px 28px; display:flex; align-items:center; gap:12px; }
-    .route .city { flex:1; }
-    .route .city .name { font-size:18px; font-weight:700; }
-    .route .city .sub { font-size:10px; color:#a8a8b0; text-transform:uppercase; letter-spacing:1px; }
-    .route .arrow { color:#c81e44; font-size:22px; }
-    .body { padding:8px 28px 24px; }
-    .row { display:flex; justify-content:space-between; align-items:center; padding:11px 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:13px; }
-    .row .lbl { color:#6b6b75; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
-    .row .val { color:#fff; font-weight:600; text-align:right; }
-    .features { padding:12px 0; }
-    .total { display:flex; justify-content:space-between; align-items:center; padding:18px 0 8px; font-size:20px; font-weight:800; }
-    .total .val { color:#c81e44; }
-    .qr-section { background:rgba(255,255,255,0.03); border-top:1px dashed rgba(255,255,255,0.12); padding:24px; text-align:center; }
-    .qr-section img { width:140px; height:140px; border-radius:12px; }
-    .qr-section .hint { font-size:10px; color:#6b6b75; margin-top:10px; }
-    .footer { text-align:center; padding:16px 28px 24px; font-size:10px; color:#4a4a52; line-height:1.6; }
-    .wallet-row { display:flex; gap:8px; justify-content:center; padding:0 28px 20px; }
-    .wallet-btn { flex:1; display:flex; align-items:center; justify-content:center; gap:6px; border-radius:12px; padding:10px; font-size:11px; font-weight:600; text-decoration:none; cursor:pointer; border:none; }
-    .wallet-btn.apple { background:#111; color:#fff; border:1px solid #333; }
-    .wallet-btn.google { background:#fff; color:#1a1a1a; }
-    @media print { body { background:#0f0f12; padding:0; } .ticket { box-shadow:none; border:none; } .wallet-row { display:none; } }
+    body { font-family:Inter,-apple-system,Segoe UI,sans-serif; background:#e8eaed; padding:28px; color:#111; }
+    .sheet { max-width:640px; margin:0 auto; background:#fff; border-radius:18px; overflow:hidden; box-shadow:0 24px 60px rgba(15,23,42,.18); }
+    .top { background:linear-gradient(135deg,#dc2626 0%,#9f1239 100%); color:#fff; padding:22px 28px; display:flex; justify-content:space-between; align-items:flex-start; }
+    .logo { width:40px; height:40px; border-radius:12px; background:rgba(255,255,255,.18); display:grid; place-items:center; font-weight:800; font-size:18px; }
+    .brand { display:flex; gap:12px; align-items:center; }
+    .ok { font-size:11px; font-weight:700; letter-spacing:1.4px; background:rgba(255,255,255,.18); padding:6px 10px; border-radius:999px; }
+    .pnrbox { background:#fff; color:#111; border:2px dashed #fecaca; border-radius:12px; padding:10px 16px; text-align:center; }
+    .pnrbox span { display:block; font-size:9px; letter-spacing:1.5px; color:#9f1239; font-weight:700; }
+    .pnrbox b { font-size:22px; letter-spacing:2px; }
+    .route { display:grid; grid-template-columns:1fr auto 1fr; gap:12px; padding:28px; align-items:center; }
+    .city .t { font-size:28px; font-weight:800; color:#dc2626; }
+    .city .n { font-size:18px; font-weight:800; }
+    .city .l { font-size:10px; color:#6b7280; letter-spacing:1px; }
+    .mid { width:54px; height:54px; border-radius:50%; border:2px dashed #fecaca; display:grid; place-items:center; color:#dc2626; font-weight:800; }
+    .grid { display:grid; grid-template-columns:1fr 160px; gap:18px; padding:0 28px 24px; }
+    .row { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #f3f4f6; font-size:13px; }
+    .row .l { color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:.4px; }
+    .row .v { font-weight:700; }
+    .qr { background:#fafafa; border:1px solid #eee; border-radius:16px; padding:12px; text-align:center; }
+    .qr img { width:128px; height:128px; }
+    .hint { font-size:10px; color:#9ca3af; margin-top:6px; }
+    .pay { display:flex; justify-content:space-between; align-items:center; margin:8px 28px 24px; padding:16px 18px; background:#fff7f7; border-radius:14px; border:1px solid #fecaca; }
+    .pay b { font-size:22px; color:#dc2626; }
+    .ft { padding:16px 28px 24px; font-size:10px; color:#9ca3af; line-height:1.6; border-top:1px dashed #e5e7eb; }
+    @media print { body { background:#fff; padding:0; } .sheet { box-shadow:none; } }
   </style></head><body>
-  <div class="ticket">
-    <div class="hero">
-      <div class="brand">
-        <div class="logo">Y</div>
-        <div><h1>YLT Travels</h1><p>Premium Bus Services</p></div>
+  <div class="sheet">
+    <div class="top">
+      <div class="brand"><div class="logo">Y</div><div><div style="font-size:18px;font-weight:800">YLT Travels</div><div style="font-size:11px;opacity:.85">${esc(typeLabel)}</div></div></div>
+      <div><div class="ok">● CONFIRMED</div>
+        <div class="pnrbox" style="margin-top:10px"><span>PNR</span><b>${esc(ticket.pnr)}</b></div>
       </div>
-      <div class="pnr-label">PNR</div>
-      <div class="pnr">${ticket.pnr}</div>
-      <span class="type-badge">${typeLabel}</span>
     </div>
     <div class="route">
-      <div class="city"><div class="sub">From</div><div class="name">${fromCity ?? ticket.route}</div></div>
-      <div class="arrow">→</div>
-      <div class="city"><div class="sub">To</div><div class="name" style="text-align:right">${toCity ?? ''}</div></div>
+      <div class="city"><div class="l">BOARDING</div><div class="t">${esc(ticket.departure)}</div><div class="n">${esc(fromCity)}</div></div>
+      <div class="mid">BUS</div>
+      <div class="city" style="text-align:right"><div class="l">DROPPING</div><div class="t" style="color:#111">${esc(ticket.duration || '—')}</div><div class="n">${esc(toCity)}</div></div>
     </div>
-    ${features ? `<div style="padding:0 28px 8px">${features}</div>` : ''}
-    <div class="body">
-      <div class="row"><span class="lbl">Operator</span><span class="val">${ticket.operator}</span></div>
-      <div class="row"><span class="lbl">Date</span><span class="val">${ticket.date}</span></div>
-      <div class="row"><span class="lbl">Departure</span><span class="val">${ticket.departure}</span></div>
-      ${ticket.seats ? `<div class="row"><span class="lbl">Seats</span><span class="val">${ticket.seats}</span></div>` : ''}
-      ${ticket.passengers ? `<div class="row"><span class="lbl">Passengers</span><span class="val">${ticket.passengers}</span></div>` : ''}
-      ${ticket.boardingPoint ? `<div class="row"><span class="lbl">Boarding</span><span class="val">${ticket.boardingPoint}</span></div>` : ''}
-      ${ticket.contactPhone ? `<div class="row"><span class="lbl">Contact</span><span class="val">${ticket.contactPhone}</span></div>` : ''}
-      <div class="row"><span class="lbl">Amount</span><span class="val">Rs. ${ticket.amount}</span></div>
-      <div class="row"><span class="lbl">Taxes</span><span class="val">Rs. ${ticket.taxes}</span></div>
-      <div class="total"><span>Total</span><span class="val">Rs. ${ticket.total}</span></div>
+    <div class="grid">
+      <div>
+        <div class="row"><span class="l">Operator</span><span class="v">${esc(ticket.operator)}</span></div>
+        ${ticket.busType ? `<div class="row"><span class="l">Service</span><span class="v">${esc(ticket.busType)}</span></div>` : ''}
+        <div class="row"><span class="l">Date of journey</span><span class="v">${esc(ticket.date)}</span></div>
+        ${ticket.seats ? `<div class="row"><span class="l">Seat no.</span><span class="v">${esc(ticket.seats)}</span></div>` : ''}
+        ${ticket.passengers ? `<div class="row"><span class="l">Passenger</span><span class="v">${esc(ticket.passengers)}</span></div>` : ''}
+        ${ticket.boardingPoint ? `<div class="row"><span class="l">Boarding point</span><span class="v">${esc(ticket.boardingPoint)}</span></div>` : ''}
+        ${ticket.contactPhone ? `<div class="row"><span class="l">Mobile</span><span class="v">${esc(ticket.contactPhone)}</span></div>` : ''}
+      </div>
+      <div class="qr">${qr ? `<img src="${esc(qr)}" alt="QR" />` : ''}<div class="hint">Scan at boarding<br>${esc(ticket.pnr)}</div></div>
     </div>
-    <div class="qr-section">
-      ${qr ? `<img src="${qr}" alt="QR" />` : '<div style="font-size:12px;color:#6b6b75">PNR: ' + ticket.pnr + '</div>'}
-      <div class="hint">Scan to verify · PNR ${ticket.pnr}</div>
-    </div>
-    <div class="wallet-row">
-      <button class="wallet-btn apple" onclick="window.__dl()">Add to Apple Wallet</button>
-      <a class="wallet-btn google" href="${googleWalletLink(ticket)}" target="_blank" rel="noopener">Add to Google Wallet</a>
-    </div>
-    <div class="footer">YLT Travels · Tirupati, Andhra Pradesh<br>Please carry this ticket to board. Arrive 15 min before departure.</div>
+    <div class="pay"><span>Total paid</span><b>Rs. ${esc(String(ticket.total))}</b></div>
+    <div class="ft">Carry this e-ticket and a government photo ID. Reporting time 15 minutes before departure. YLT Travels · Tirupati, Andhra Pradesh</div>
   </div>
-  <script>
-    window.__dl=function(){fetch('${walletPassHref(ticket)}').then(r=>r.blob()).then(b=>{const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='${ticket.pnr}.pkpass';a.click();URL.revokeObjectURL(u);});};
-    window.onload=function(){setTimeout(function(){window.print();},400);};
-  </script>
   </body></html>`);
   w.document.close();
 }
 
 /** Build an Apple Wallet .pkpass-style blob (pass.json + manifest) as a downloadable URL. */
-export function walletPassHref(ticket: TicketData): string {
+export function pkpassBytes(ticket: TicketData): Uint8Array {
   const passJson = buildPassJson(ticket);
   const manifest = JSON.stringify({ 'pass.json': sha1Hex(passJson) }, null, 2);
-  const zip = buildZip({ 'pass.json': passJson, 'manifest.json': manifest });
+  return buildZip({ 'pass.json': passJson, 'manifest.json': manifest });
+}
+
+export function walletPassHref(ticket: TicketData): string {
+  const zip = pkpassBytes(ticket);
   return URL.createObjectURL(new Blob([zip as BlobPart], { type: 'application/vnd.apple.pkpass' }));
 }
 
 /** Generate and download a .pkpass zip (pass.json + manifest.json). */
 export async function downloadPkpass(ticket: TicketData): Promise<void> {
-  const passJson = buildPassJson(ticket);
-  const manifest = JSON.stringify({ 'pass.json': sha1Hex(passJson) }, null, 2);
-  const zip = buildZip({ 'pass.json': passJson, 'manifest.json': manifest });
+  const zip = pkpassBytes(ticket);
   const url = URL.createObjectURL(new Blob([zip as BlobPart], { type: 'application/vnd.apple.pkpass' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${ticket.pnr}.pkpass`;
+  a.download = `YLT-${ticket.pnr}.pkpass`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadAppleWallet(ticket: TicketData) {
+  return downloadPkpass(ticket);
+}
+
+export function icsStamp(date: string, time: string): string {
+  const d = date.replace(/-/g, '');
+  const hm = (time || '00:00').replace(':', '').replace(/[^\d]/g, '').slice(0, 4).padEnd(4, '0');
+  return `${d}T${hm}00`;
+}
+
+export function icsContent(ticket: TicketData): string {
+  const { from, to } = splitRoute(ticket.route);
+  const start = icsStamp(ticket.date, ticket.departure);
+  const desc = [
+    `YLT Travels ${TYPE_LABEL[ticket.type]}`,
+    `PNR ${ticket.pnr}`,
+    `${ticket.operator} · ${ticket.route}`,
+    ticket.seats ? `Seats: ${ticket.seats}` : '',
+    `Total: INR ${ticket.total}`,
+    'Show the PDF QR at boarding. iPhone: open the .pkpass attachment. Android: keep this calendar event or import the pass in WalletPasses.',
+  ].filter(Boolean).join('\\n');
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//YLT Travels//E-Ticket//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${ticket.pnr}@ylttravels.com`,
+    `DTSTAMP:${start}Z`,
+    `DTSTART;TZID=Asia/Kolkata:${start}`,
+    `SUMMARY:${ticket.operator} ${from} to ${to}`,
+    `DESCRIPTION:${desc}`,
+    `LOCATION:${ticket.boardingPoint || from}`,
+    'STATUS:CONFIRMED',
+    'BEGIN:VALARM',
+    'TRIGGER:-PT2H',
+    'ACTION:DISPLAY',
+    `DESCRIPTION:Board ${ticket.operator} · PNR ${ticket.pnr}`,
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+}
+
+export function googleCalendarUrl(ticket: TicketData): string {
+  const { from, to } = splitRoute(ticket.route);
+  const start = icsStamp(ticket.date, ticket.departure);
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: `${ticket.operator} · ${from} → ${to}`,
+    dates: `${start}/${start}`,
+    details: `YLT e-ticket PNR ${ticket.pnr}\nSeats: ${ticket.seats || '—'}\nTotal: ₹${ticket.total}\nShow QR at boarding.`,
+    location: ticket.boardingPoint || from,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+/** Google Wallet / Android: ICS boarding pass + Google Calendar save (works without Google Wallet issuer keys). */
+export function downloadGoogleWallet(ticket: TicketData): void {
+  const ics = icsContent(ticket);
+  const url = URL.createObjectURL(new Blob([ics], { type: 'text/calendar;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `YLT-${ticket.pnr}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+  window.open(googleCalendarUrl(ticket), '_blank', 'noopener');
 }
 
 function buildPassJson(ticket: TicketData): string {
@@ -227,10 +315,9 @@ function buildPassJson(ticket: TicketData): string {
   }, null, 2);
 }
 
-/** Google Wallet save link (deep-link style). */
+/** Google Calendar save URL used as the Android wallet fallback. */
 export function googleWalletLink(ticket: TicketData): string {
-  const text = encodeURIComponent(`YLT Travels ${TYPE_LABEL[ticket.type]} · PNR ${ticket.pnr} · ${ticket.route} · ${ticket.date} ${ticket.departure}`);
-  return `https://www.google.com/maps/save/place/${text}`;
+  return googleCalendarUrl(ticket);
 }
 
 // ---- Minimal ZIP writer (store / no compression) ----
@@ -360,8 +447,8 @@ function sha1Hex(str: string): string {
   return [h0, h1, h2, h3, h4].map((h) => h.toString(16).padStart(8, '0')).join('');
 }
 
-// ---- Inline QR Code Model 2 implementation (byte mode, ECC level M) ----
-// Adapted minimal version for short UTF-8 payloads.
+/*
+ * Legacy inline QR implementation removed — tickets now use the `qrcode` package.
 
 class QRCode {
   private modules: boolean[][] = [];
@@ -722,3 +809,4 @@ const QRCodeCapacity = {
     return out;
   },
 };
+*/

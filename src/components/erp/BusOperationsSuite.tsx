@@ -7,57 +7,79 @@ import { useErpStore, fmtINR, type ErpBus } from '../../store/erpStore';
 import { Card, StatCard, Badge, Modal, Field, ModuleHeader, EmptyStateCard, inputCls } from './ui';
 import { RippleButton } from '../operator/RippleButton';
 import { ErpLoader } from '../operator/ErpLoader';
+import { PhotoField } from '../partner/MediaUpload';
+import { authUserId } from '../../lib/auth';
 
 const today = new Date().toISOString().slice(0, 10);
 
-export default function BusOperationsSuite() {
+export type BusOpsView = 'desk' | 'fleet' | 'health' | 'expenses' | 'permits';
+
+const TITLES: Record<BusOpsView, { crumb: string; title: string; sub: string }> = {
+  desk: { crumb: 'Operations', title: 'Bus operations', sub: 'Fleet, occupancy, and compliance at a glance. Use the left Bus menu to open each desk.' },
+  fleet: { crumb: 'Fleet', title: 'Fleet registry', sub: 'Register coaches, photos, layout, and assigned crew.' },
+  health: { crumb: 'Health', title: 'Health & diagnostics', sub: 'Engine, tyre, battery, and emissions records for your fleet.' },
+  expenses: { crumb: 'Expenses', title: 'Bus expenses', sub: 'Fuel, toll, maintenance, and other running costs per coach.' },
+  permits: { crumb: 'Permits', title: 'Permits & compliance', sub: 'Permit, insurance, and document expiry for each bus.' },
+};
+
+export default function BusOperationsSuite({ view = 'fleet' }: { view?: BusOpsView }) {
   const { buses, busHealth, busExpenses, crew, compliance, maintenanceLogs, insert, update, remove, logAction, loading } = useErpStore();
-  const [tab, setTab] = useState<'fleet' | 'health' | 'expenses' | 'permits'>('fleet');
   const [editing, setEditing] = useState<ErpBus | null>(null);
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<ErpBus | null>(null);
   const [expenseBusId, setExpenseBusId] = useState<string | null>(null);
 
-  const activeBuses = buses.filter((b) => b.status === 'active').length;
-  const maintenanceBuses = buses.filter((b) => b.status === 'maintenance').length;
-  const permitAlerts = buses.filter((b) => b.permit_expiry && b.permit_expiry <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)).length;
-  const maintAlerts = buses.filter((b) => b.next_maintenance && b.next_maintenance <= new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)).length;
+  const fleet = Array.isArray(buses) ? buses : [];
+  const healthRows = Array.isArray(busHealth) ? busHealth : [];
+  const expenseRows = Array.isArray(busExpenses) ? busExpenses : [];
+  const crewRows = Array.isArray(crew) ? crew : [];
+  const complianceRows = Array.isArray(compliance) ? compliance : [];
+  const maintRows = Array.isArray(maintenanceLogs) ? maintenanceLogs : [];
 
-  if (loading && !buses.length) return <ErpLoader label="Loading bus operations…" />;
+  const activeBuses = fleet.filter((b) => b.status === 'active').length;
+  const maintenanceBuses = fleet.filter((b) => b.status === 'maintenance').length;
+  const permitAlerts = fleet.filter((b) => b.permit_expiry && b.permit_expiry <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)).length;
+  const maintAlerts = fleet.filter((b) => b.next_maintenance && b.next_maintenance <= new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10)).length;
+
+  if (loading && !fleet.length) return <ErpLoader label="Loading bus operations…" />;
 
   if (selected) return <BusDetail bus={selected} onBack={() => setSelected(null)} />;
+
+  const meta = TITLES[view] || TITLES.fleet;
+  const showFleet = view === 'desk' || view === 'fleet';
+  const showHealth = view === 'desk' || view === 'health';
+  const showExpenses = view === 'expenses';
+  const showPermits = view === 'permits' || view === 'desk';
 
   return (
     <div className="space-y-5">
       <ModuleHeader
-        breadcrumb={["Assets", "Bus Operations Suite"]}
-        title="Bus Operations Suite"
-        description="Fleet registry, health diagnostics, expenses, permits & compliance."
+        breadcrumb={['Bus', meta.crumb]}
+        title={meta.title}
+        description={meta.sub}
         actions={<RippleButton className="text-sm" onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Register Bus</RippleButton>}
       />
 
       <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Buses" value={String(buses.length)} sub={`${activeBuses} active`} icon={Bus} tone="crimson" /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Buses" value={String(fleet.length)} sub={`${activeBuses} active`} icon={Bus} tone="crimson" /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="In Maintenance" value={String(maintenanceBuses)} icon={Wrench} tone="amber" /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Permit Alerts" value={String(permitAlerts)} sub="Next 30 days" icon={ShieldCheck} tone="blue" /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Maint. Due" value={String(maintAlerts)} sub="Next 7 days" icon={AlertTriangle} tone="amber" /></div>
       </div>
 
-      <div className="flex gap-1 border-b" style={{ borderColor: 'var(--border)' }}>
-        {(['fleet', 'health', 'expenses', 'permits'] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-4 py-2.5 text-sm font-medium capitalize transition ${tab === t ? 'border-b-2 border-crimson-500 text-crimson-600' : ''}`}
-            style={tab === t ? undefined : { color: 'var(--text-muted)' }}>{t === 'fleet' ? 'Fleet Registry' : t === 'health' ? 'Health & Diagnostics' : t === 'expenses' ? 'Expense Ledger' : 'Permit & Compliance'}</button>
-        ))}
-      </div>
-
-      {tab === 'fleet' && (
+      {showFleet && (
         <div className="space-y-4">
+          {view === 'desk' ? <h3 className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>Fleet snapshot</h3> : null}
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {buses.map((b) => {
-              const driver = crew.find((c) => c.id === b.driver_id);
+            {fleet.map((b) => {
+              const driver = crewRows.find((c) => c.id === b.driver_id);
               return (
                 <Card key={b.id} onClick={() => setSelected(b)}>
+                  {b.photo_url ? (
+                    <div className="-mx-5 -mt-5 mb-3 h-28 overflow-hidden rounded-t-2xl">
+                      <img src={b.photo_url} alt="" className="h-full w-full object-cover" />
+                    </div>
+                  ) : null}
                   <div className="flex items-start justify-between">
                     <div>
                       <h3 className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>{b.name}</h3>
@@ -66,7 +88,7 @@ export default function BusOperationsSuite() {
                     <Badge tone={b.status === 'active' ? 'green' : b.status === 'maintenance' ? 'amber' : 'gray'}>{b.status}</Badge>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    {(b.amenities as string[]).slice(0, 4).map((a) => <span key={a} className="rounded-md bg-[var(--bg-raised)] px-2 py-0.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{a}</span>)}
+                    {(Array.isArray(b.amenities) ? b.amenities : []).slice(0, 4).map((a) => <span key={a} className="rounded-md bg-[var(--bg-raised)] px-2 py-0.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{a}</span>)}
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                     <Mini label="Fuel" value={`${b.fuel_pct}%`} tone={b.fuel_pct < 30 ? 'red' : 'green'} />
@@ -76,23 +98,23 @@ export default function BusOperationsSuite() {
                   </div>
                   <div className="mt-3 flex items-center justify-between border-t pt-3" style={{ borderColor: 'var(--border)' }}>
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Driver: {driver?.name ?? 'Unassigned'}</span>
-                    <ChevronRight className="h-4 w-4 text-crimson-500" />
+                    <button type="button" className="text-xs font-semibold text-crimson-600" onClick={(e) => { e.stopPropagation(); setEditing(b); }}>Edit</button>
                   </div>
                 </Card>
               );
             })}
           </div>
-          {!buses.length && <EmptyStateCard icon={Bus} title="No buses registered" description="Register your first bus to start managing fleet operations, health, and compliance." ctaLabel="Register Bus" onCta={() => setAdding(true)} />}
+          {!fleet.length && <EmptyStateCard icon={Bus} title="No buses registered" description="Register your first bus to start managing fleet operations, health, and compliance." ctaLabel="Register Bus" onCta={() => setAdding(true)} />}
         </div>
       )}
 
-      {tab === 'health' && (
+      {showHealth && (
         <Card>
           <h3 className="mb-4 font-display font-bold" style={{ color: 'var(--text-primary)' }}>Bus Health & Diagnostics</h3>
-          {busHealth.length ? (
+          {healthRows.length ? (
             <div className="space-y-2">
-              {busHealth.slice(0, 20).map((h) => {
-                const bus = buses.find((b) => b.id === h.bus_id);
+              {healthRows.slice(0, view === 'desk' ? 8 : 20).map((h) => {
+                const bus = fleet.find((b) => b.id === h.bus_id);
                 return (
                   <div key={h.id} className="flex items-center gap-3 rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
                     <Activity className={`h-4 w-4 ${h.emissions_ok ? 'text-emerald-500' : 'text-red-500'}`} />
@@ -114,14 +136,14 @@ export default function BusOperationsSuite() {
         </Card>
       )}
 
-      {tab === 'expenses' && (
+      {showExpenses && (
         <div className="space-y-4">
           <Card>
             <h3 className="mb-4 font-display font-bold" style={{ color: 'var(--text-primary)' }}>Bus Expense Ledger</h3>
-            {busExpenses.length ? (
+            {expenseRows.length ? (
               <div className="space-y-2">
-                {busExpenses.slice(0, 30).map((e) => {
-                  const bus = buses.find((b) => b.id === e.bus_id);
+                {expenseRows.slice(0, 30).map((e) => {
+                  const bus = fleet.find((b) => b.id === e.bus_id);
                   return (
                     <div key={e.id} className="flex items-center gap-3 rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
                       <div className="flex-1">
@@ -136,20 +158,20 @@ export default function BusOperationsSuite() {
               </div>
             ) : <EmptyStateCard icon={FileText} title="No expenses recorded" description="Track fuel, tolls, maintenance and other bus expenses here." ctaLabel="Add Expense" onCta={() => setExpenseBusId('new')} />}
           </Card>
-          {expenseBusId && <ExpenseModal busId={expenseBusId === 'new' ? '' : expenseBusId} buses={buses} onClose={() => setExpenseBusId(null)} onSave={async (data) => { await insert('erp_bus_expenses', data); await logAction('add_expense', 'erp_bus_expenses', '', data); setExpenseBusId(null); }} />}
+          {expenseBusId && <ExpenseModal busId={expenseBusId === 'new' ? '' : expenseBusId} buses={fleet} onClose={() => setExpenseBusId(null)} onSave={async (data) => { await insert('erp_bus_expenses', data); await logAction('add_expense', 'erp_bus_expenses', '', data); setExpenseBusId(null); }} />}
         </div>
       )}
 
-      {tab === 'permits' && (
+      {showPermits && (
         <Card>
           <h3 className="mb-4 font-display font-bold" style={{ color: 'var(--text-primary)' }}>Permit & Compliance</h3>
-          {compliance.length ? (
+          {complianceRows.length ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="border-b" style={{ borderColor: 'var(--border)' }}>{['Bus', 'Document', 'Number', 'Expiry', 'Status'].map((h) => <th key={h} className="px-3 py-2 text-left text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {compliance.map((c) => {
-                    const bus = buses.find((b) => b.id === c.bus_id);
+                  {complianceRows.map((c) => {
+                    const bus = fleet.find((b) => b.id === c.bus_id);
                     const expired = c.expiry_date <= today;
                     const soon = c.expiry_date <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
                     return (
@@ -170,9 +192,9 @@ export default function BusOperationsSuite() {
       )}
 
       {(adding || editing) && (
-        <BusForm bus={editing} crew={crew} onClose={() => { setAdding(false); setEditing(null); }} onSave={async (data) => {
+        <BusForm bus={editing} crew={crewRows} onClose={() => { setAdding(false); setEditing(null); }} onSave={async (data) => {
           if (editing) { await update('erp_buses', editing.id, data); await logAction('update_bus', 'erp_buses', editing.id, data); }
-          else { await insert('erp_buses', data); await logAction('add_bus', 'erp_buses', '', data); }
+          else { await insert('erp_buses', { ...data, partner_id: authUserId() || undefined }); await logAction('add_bus', 'erp_buses', '', data); }
           setAdding(false); setEditing(null);
         }} />
       )}
@@ -181,7 +203,11 @@ export default function BusOperationsSuite() {
 }
 
 function BusDetail({ bus, onBack }: { bus: ErpBus; onBack: () => void }) {
-  const { crew, busHealth, maintenanceLogs, busExpenses } = useErpStore();
+  const store = useErpStore();
+  const crew = Array.isArray(store.crew) ? store.crew : [];
+  const busHealth = Array.isArray(store.busHealth) ? store.busHealth : [];
+  const maintenanceLogs = Array.isArray(store.maintenanceLogs) ? store.maintenanceLogs : [];
+  const busExpenses = Array.isArray(store.busExpenses) ? store.busExpenses : [];
   const driver = crew.find((c) => c.id === bus.driver_id);
   const cleaner = crew.find((c) => c.id === bus.cleaner_id);
   const health = busHealth.filter((h) => h.bus_id === bus.id).slice(0, 5);
@@ -194,9 +220,12 @@ function BusDetail({ bus, onBack }: { bus: ErpBus; onBack: () => void }) {
         <ChevronRight className="h-4 w-4 rotate-180" /> Back to Fleet
       </button>
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="flex items-start gap-3">
+          {bus.photo_url ? <img src={bus.photo_url} alt="" className="h-16 w-24 rounded-lg object-cover" /> : null}
+          <div>
           <h1 className="font-display text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{bus.name}</h1>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{bus.registration_number} · {bus.layout} · {bus.total_seats} seats</p>
+          </div>
         </div>
         <Badge tone={bus.status === 'active' ? 'green' : bus.status === 'maintenance' ? 'amber' : 'gray'}>{bus.status}</Badge>
       </div>
@@ -258,6 +287,7 @@ function BusForm({ bus, crew, onClose, onSave }: { bus: ErpBus | null; crew: any
     insurance_expiry: bus?.insurance_expiry ?? '', next_maintenance: bus?.next_maintenance ?? '', status: bus?.status ?? 'active',
     fuel_pct: bus?.fuel_pct ?? 100, gps_status: bus?.gps_status ?? 'online', driver_id: bus?.driver_id ?? '', cleaner_id: bus?.cleaner_id ?? '',
     engine_hours: bus?.engine_hours ?? 0, odometer_km: bus?.odometer_km ?? 0,
+    photo_url: bus?.photo_url ?? '',
   });
   return (
     <Modal open onClose={onClose} title={bus ? 'Edit Bus' : 'Register Bus'} wide>
@@ -288,6 +318,7 @@ function BusForm({ bus, crew, onClose, onSave }: { bus: ErpBus | null; crew: any
           <Field label="Odometer (km)"><input type="number" className={inputCls} value={f.odometer_km} onChange={(e) => setF({ ...f, odometer_km: +e.target.value })} /></Field>
           <Field label="Engine Hours"><input type="number" className={inputCls} value={f.engine_hours} onChange={(e) => setF({ ...f, engine_hours: +e.target.value })} /></Field>
         </div>
+        <PhotoField label="Bus photo" url={f.photo_url || ''} onChange={(photo_url) => setF({ ...f, photo_url })} />
         <div className="flex justify-end gap-2 pt-2">
           <RippleButton variant="ghost" className="text-sm" onClick={onClose}>Cancel</RippleButton>
           <RippleButton className="text-sm" onClick={() => onSave(f)}>Save</RippleButton>

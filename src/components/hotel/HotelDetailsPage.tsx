@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowLeft, Star, MapPin, Shield, Wifi, Waves, Sparkles, Utensils, ParkingCircle,
   Dumbbell, Wine, ConciergeBell, WashingMachine, Snowflake, Plane, Briefcase,
@@ -15,13 +15,29 @@ const AMENITY_ICONS: Record<string, React.ComponentType<{ className?: string }>>
 
 export default function HotelDetailsPage({ hotelId, go }: { hotelId: string; go: (v: any) => void }) {
   const hotel = useHotelStore(s => s.getHotel(hotelId));
+  const loadHotel = useHotelStore(s => s.loadHotel);
   const [mainPhoto, setMainPhoto] = useState(0);
+  const [loadingHotel, setLoadingHotel] = useState(!hotel);
+
+  useEffect(() => {
+    if (hotel) { setLoadingHotel(false); return; }
+    let live = true;
+    setLoadingHotel(true);
+    void loadHotel(hotelId).finally(() => { if (live) setLoadingHotel(false); });
+    return () => { live = false; };
+  }, [hotel, hotelId, loadHotel]);
+
+  if (loadingHotel && !hotel) return (
+    <div className="grid min-h-[60vh] place-items-center" style={{ backgroundColor: 'var(--bg-page)' }}>
+      <p className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>Loading hotel…</p>
+    </div>
+  );
 
   if (!hotel) return (
     <div className="grid min-h-[60vh] place-items-center" style={{ backgroundColor: 'var(--bg-page)' }}>
       <div className="text-center">
         <p className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Hotel not found</p>
-        <button onClick={() => go({ name: 'hotelResults' })} className="mt-3 rounded-lg bg-crimson-600 px-4 py-2 text-sm text-white">Back to Results</button>
+        <button onClick={() => go({ name: 'hotelResults' })} className="mt-3 rounded-lg bg-gold-500 px-4 py-2 text-sm font-bold text-navy-950">Back to Results</button>
       </div>
     </div>
   );
@@ -30,7 +46,7 @@ export default function HotelDetailsPage({ hotelId, go }: { hotelId: string; go:
     <div className="min-h-screen" style={{ backgroundColor: 'var(--bg-page)' }}>
       <div className="mx-auto max-w-5xl px-4 py-8">
         <button onClick={() => go({ name: 'hotelResults' })}
-          className="mb-4 flex items-center gap-2 text-sm font-medium transition hover:text-crimson-500" style={{ color: 'var(--text-secondary)' }}>
+          className="mb-4 flex items-center gap-2 text-sm font-medium transition hover:text-navy-800" style={{ color: 'var(--text-secondary)' }}>
           <ArrowLeft className="h-4 w-4" /> Back to Results
         </button>
 
@@ -52,6 +68,9 @@ export default function HotelDetailsPage({ hotelId, go }: { hotelId: string; go:
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h1 className="font-display text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{hotel.name}</h1>
+                  {hotel.listing_source === 'catalog' && (
+                    <span className="mt-1 inline-flex rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">Catalog</span>
+                  )}
                   <p className="mt-1 flex items-center gap-1.5 text-sm" style={{ color: 'var(--text-muted)' }}>
                     <MapPin className="h-4 w-4" />{hotel.city} &middot; {hotel.address}
                   </p>
@@ -106,11 +125,11 @@ export default function HotelDetailsPage({ hotelId, go }: { hotelId: string; go:
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-lg font-bold text-crimson-500">{formatINR(room.price_per_night)}</p>
+                        <p className="text-lg font-bold text-navy-800">{formatINR(room.price_per_night)}</p>
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>per night + GST</p>
                         {room.available ? (
                           <button onClick={() => go({ name: 'hotelCheckout', hotelId: hotel.id, roomId: room.id })}
-                            className="mt-2 flex items-center gap-1 rounded-lg bg-crimson-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-crimson-700">
+                            className="mt-2 flex items-center gap-1 rounded-lg bg-gold-500 px-4 py-2 text-xs font-semibold text-navy-950 transition hover:bg-gold-400">
                             Select <ChevronRight className="h-3 w-3" />
                           </button>
                         ) : (
@@ -163,9 +182,9 @@ export default function HotelDetailsPage({ hotelId, go }: { hotelId: string; go:
             <div className="rounded-xl border p-5" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-card)' }}>
               <h3 className="mb-3 text-sm font-bold" style={{ color: 'var(--text-primary)' }}>Quick Book</h3>
               <p className="mb-3 text-xs" style={{ color: 'var(--text-muted)' }}>Starting from</p>
-              <p className="text-2xl font-bold text-crimson-500">{formatINR(hotel.base_price)}<span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>/night</span></p>
+              <p className="text-2xl font-bold text-navy-800">{formatINR(hotel.base_price)}<span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>/night</span></p>
               <button onClick={() => { const r = hotel.rooms.find(rm => rm.available); if (r) go({ name: 'hotelCheckout', hotelId: hotel.id, roomId: r.id }); }}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-crimson-600 py-2.5 text-sm font-semibold text-white transition hover:bg-crimson-700">
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-gold-500 py-2.5 text-sm font-semibold text-navy-950 transition hover:bg-gold-400">
                 <Calendar className="h-4 w-4" /> Book Now
               </button>
             </div>

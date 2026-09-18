@@ -1,25 +1,32 @@
 import { useMemo, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Star, ArrowRight, MapPin, CheckCircle2, Download, Wallet,
-  ArrowLeft, SlidersHorizontal, Radio, Users, Leaf, Hotel, GitCompare,
-  Clock, X, Moon, Utensils, Accessibility, BadgeCheck, ShieldAlert, Sparkles,
+  Star, ArrowRight, MapPin,
+  ArrowLeft, SlidersHorizontal, Users, GitCompare,
+  Clock, X, Sparkles, ChevronDown,
 } from 'lucide-react';
 import type { Bus, Seat } from '../types';
 import type { View } from '../store/nav';
-import { generateBuses, generateSeats, inSlot, TIME_SLOTS } from '../data/buses';
+import { generateSeats, generateBuses, inSlot, TIME_SLOTS } from '../data/buses';
 import { formatINR, formatDateLong, formatTime12, formatDuration } from '../lib/format';
 import { type LastMileCar } from '../data/mockCars';
 import SearchWidget from './SearchWidget';
 import LastMileUpsell from './LastMileUpsell';
 import AddressInputModal from './AddressInputModal';
+import { SeatDeckPanel, BusRouteSidebar } from './BusSeatStudio';
 import { useCheckoutStore } from '../store/checkoutStore';
 import { useLastMileStore } from '../store/lastMileStore';
 import { TAX_RATE } from '../lib/business';
 import { recordBooking } from './MyBookingsPage';
 import { useAuth } from '../lib/auth';
-import { printTicket, downloadPkpass, type TicketData } from '../lib/ticket';
-
-const API = import.meta.env.VITE_API_BASE_URL ?? '';
+import { qrSvgDataUrl, type TicketData } from '../lib/ticket';
+import { payWithRazorpay } from '../lib/razorpay';
+import TicketActions, { emailTicket } from './TicketActions';
+import { apiFetch } from '../lib/api';
+import { busCatalogIdentity, mergeLiveWithCatalog } from '../lib/publicCatalog';
+import { useAccountPrefs } from '../store/accountPrefs';
+import BusResultChips from './BusResultChips';
+import BusDetailsSheet, { type BusDetailsTab } from './BusDetailsSheet';
 
 interface Props {
   from: string;
@@ -45,30 +52,135 @@ function toggleSet(set: Set<string>, value: string) {
   return next;
 }
 
+function mapPublicBus(row: any): Bus {
+  const seats: Seat[] | undefined = Array.isArray(row?.seats) ? row.seats.map((s: any) => ({
+    id: String(s.id || s.seatId || s.seat_number || s.label || ''),
+    label: String(s.label || s.seat_number || s.seatNumber || ''),
+    type: (s.type || (String(s.deck || '').includes('upper') ? 'sleeper-upper' : 'seater')) as Seat['type'],
+    price: Number(s.price ?? s.fare ?? row.price ?? 0),
+    is_booked: Boolean(s.is_booked || s.status === 'booked' || s.status === 'sold'),
+    deck: s.deck === 'upper' ? 'upper' : 'lower',
+    is_ladies: Boolean(s.is_ladies),
+    is_window: Boolean(s.is_window),
+    is_single: Boolean(s.is_single),
+  })).filter((s: Seat) => s.id) : undefined;
+  const boarding = Array.isArray(row?.boarding_points) ? row.boarding_points.map((p: any) => ({ name: String(p.name || p), time: String(p.time || '') })) : [];
+  const dropping = Array.isArray(row?.dropping_points) ? row.dropping_points.map((p: any) => ({ name: String(p.name || p), time: String(p.time || '') })) : [];
+  return {
+    id: String(row?.id || row?.schedule_id || ''),
+    fleet_bus_id: String(row?.fleet_bus_id || row?.bus_id || ''),
+    schedule_id: String(row?.schedule_id || row?.id || ''),
+    operator: String(row?.operator || 'YLT Travels'),
+    bus_type: String(row?.bus_type || row?.layout || 'YLT Coach'),
+    service_number: String(row?.service_number || ''),
+    departure_time: String(row?.departure_time || ''),
+    arrival_time: String(row?.arrival_time || ''),
+    duration_mins: Number(row?.duration_mins || 0),
+    price: Number(row?.price || 0),
+    original_price: Number(row?.original_price || row?.price || 0),
+    rating: Number(row?.rating || 0),
+    reviews: Number(row?.reviews || 0),
+    is_ac: Boolean(row?.is_ac),
+    is_sleeper: Boolean(row?.is_sleeper),
+    is_volvo: Boolean(row?.is_volvo),
+    live_tracking: Boolean(row?.live_tracking),
+    sla_verified: Boolean(row?.sla_verified),
+    women_safety: Boolean(row?.women_safety),
+    amenities: Array.isArray(row?.amenities) ? row.amenities.map(String) : [],
+    from: String(row?.from || row?.from_city || ''),
+    to: String(row?.to || row?.to_city || ''),
+    date: String(row?.date || row?.departure_date || ''),
+    via: Array.isArray(row?.via) ? row.via.map(String) : [],
+    seats_total: Number(row?.seats_total || 0),
+    seats_available: Number(row?.seats_available || 0),
+    single_seats: Number(row?.single_seats || 0),
+    ladies_seats: Number(row?.ladies_seats || 0),
+    window_seats: Number(row?.window_seats || 0),
+    boarding_points: boarding,
+    dropping_points: dropping,
+    cancellation: (row?.cancellation === 'free-until-6h' || row?.cancellation === 'non-refundable' ? row.cancellation : 'partial') as Bus['cancellation'],
+    rest_stop_rating: Number(row?.rest_stop_rating || 0),
+    delay_mins: Number(row?.delay_mins || 0),
+    co2_kg: Number(row?.co2_kg || 0),
+    hotel_bundle_saving: Number(row?.hotel_bundle_saving || 0),
+    punctuality: Number(row?.punctuality || 0),
+    meals: Boolean(row?.meals),
+    accessible: Boolean(row?.accessible),
+    night_crew: Boolean(row?.night_crew),
+    delay_guarantee: Boolean(row?.delay_guarantee),
+    prime: Boolean(row?.prime),
+    insurance_available: Boolean(row?.insurance_available),
+    smart_score: Number(row?.smart_score || 0),
+    seats,
+    photo_url: String(row?.photo_url || ''),
+    listing_source: row?.listing_source === 'catalog' ? 'catalog' : 'partner',
+  };
+}
+
 export default function ResultsPage({ from, to, date, returnDate, go, onRequireAuth }: Props) {
   const [leg, setLeg] = useState<'onward' | 'return'>('onward');
   const [sort, setSort] = useState<SortKey>('smart');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [quick, setQuick] = useState<Set<QuickFilter>>(new Set());
+  const [alertOn, setAlertOn] = useState(false);
+  const bookingForWomen = useAccountPrefs((s) => s.bookingForWomen);
+
+  const [quick, setQuick] = useState<Set<QuickFilter>>(() => bookingForWomen ? new Set(['women']) : new Set());
   const [depSlots, setDepSlots] = useState<Set<string>>(new Set());
   const [arrSlots, setArrSlots] = useState<Set<string>>(new Set());
   const [boarding, setBoarding] = useState<Set<string>>(new Set());
   const [dropping, setDropping] = useState<Set<string>>(new Set());
   const [features, setFeatures] = useState<Set<string>>(new Set());
-  const [ladyQuota, setLadyQuota] = useState(false);
+  const [ladyQuota, setLadyQuota] = useState(bookingForWomen);
   const [windowOnly, setWindowOnly] = useState(false);
+  const [priceCap, setPriceCap] = useState<number | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [alertOn, setAlertOn] = useState(false);
+
+  useEffect(() => {
+    setQuick((prev) => {
+      const next = new Set(prev);
+      if (bookingForWomen) next.add('women');
+      else next.delete('women');
+      return next;
+    });
+    setLadyQuota(bookingForWomen);
+  }, [bookingForWomen]);
 
   const activeFrom = leg === 'return' && returnDate ? to : from;
   const activeTo = leg === 'return' && returnDate ? from : to;
   const activeDate = leg === 'return' && returnDate ? returnDate : date;
 
-  const buses = useMemo(() => generateBuses(activeFrom, activeTo, activeDate), [activeFrom, activeTo, activeDate]);
+  const [buses, setBuses] = useState<Bus[]>([]);
+  const [loadingBuses, setLoadingBuses] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingBuses(true);
+    apiFetch(`/api/buses?from=${encodeURIComponent(activeFrom)}&to=${encodeURIComponent(activeTo)}&date=${encodeURIComponent(activeDate)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!alive) return;
+        const rows = Array.isArray(data) ? data : (Array.isArray(data?.buses) ? data.buses : []);
+        const live = rows.map(mapPublicBus).filter((b: Bus) => b.id);
+        const catalog = generateBuses(activeFrom, activeTo, activeDate);
+        setBuses(mergeLiveWithCatalog(live, catalog, busCatalogIdentity));
+      })
+      .catch(() => {
+        if (!alive) return;
+        setBuses(mergeLiveWithCatalog([], generateBuses(activeFrom, activeTo, activeDate), busCatalogIdentity));
+      })
+      .finally(() => { if (alive) setLoadingBuses(false); });
+    return () => { alive = false; };
+  }, [activeFrom, activeTo, activeDate]);
 
   const boardingOptions = useMemo(() => [...new Set(buses.flatMap((b) => b.boarding_points.map((p) => p.name)))].sort(), [buses]);
   const droppingOptions = useMemo(() => [...new Set(buses.flatMap((b) => b.dropping_points.map((p) => p.name)))].sort(), [buses]);
+  const priceBounds = useMemo(() => {
+    const ps = buses.map((b) => b.price).filter((n) => Number.isFinite(n));
+    if (!ps.length) return { min: 0, max: 0 };
+    return { min: Math.min(...ps), max: Math.max(...ps) };
+  }, [buses]);
+  const activePriceCap = priceCap ?? priceBounds.max;
 
   const filtered = useMemo(() => {
     let list = buses.filter((b) => {
@@ -101,6 +213,7 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
       if (features.has('sla') && !b.sla_verified) return false;
       if (ladyQuota && b.ladies_seats < 1) return false;
       if (windowOnly && b.window_seats < 1) return false;
+      if (b.price > activePriceCap) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
@@ -111,21 +224,21 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
       return a.departure_time.localeCompare(b.departure_time);
     });
     return list;
-  }, [buses, quick, depSlots, arrSlots, boarding, dropping, features, ladyQuota, windowOnly, sort]);
+  }, [buses, quick, depSlots, arrSlots, boarding, dropping, features, ladyQuota, windowOnly, sort, activePriceCap]);
 
-  const cheapest = useMemo(() => buses.reduce((a, b) => (a.price < b.price ? a : b)), [buses]);
-  const fastest = useMemo(() => buses.reduce((a, b) => (a.duration_mins < b.duration_mins ? a : b)), [buses]);
-  const topRated = useMemo(() => buses.reduce((a, b) => (a.rating > b.rating ? a : b)), [buses]);
-  const bestValue = useMemo(() => buses.reduce((a, b) => ((a.rating / a.price) > (b.rating / b.price) ? a : b)), [buses]);
+  const cheapest = useMemo(() => buses.reduce<Bus | null>((a, b) => (!a || a.price < b.price ? a || b : b), null), [buses]);
+  const fastest = useMemo(() => buses.reduce<Bus | null>((a, b) => (!a || a.duration_mins < b.duration_mins ? a || b : b), null), [buses]);
+  const topRated = useMemo(() => buses.reduce<Bus | null>((a, b) => (!a || a.rating > b.rating ? a || b : b), null), [buses]);
+  const bestValue = useMemo(() => buses.reduce<Bus | null>((a, b) => (!a || (a.rating / Math.max(1, a.price)) > (b.rating / Math.max(1, b.price)) ? a || b : b), null), [buses]);
 
   const calendar = useMemo(() => {
     return [-1, 0, 1, 2, 3].map((offset) => {
       const d = shiftDate(date, offset);
       if (d < new Date().toISOString().slice(0, 10)) return null;
-      const list = generateBuses(from, to, d);
-      return { date: d, count: list.length, min: Math.min(...list.map((b) => b.price)) };
+      const isActive = d === activeDate;
+      return { date: d, count: isActive ? buses.length : 0, min: isActive && buses.length ? Math.min(...buses.map((b) => b.price)) : 0 };
     }).filter(Boolean) as { date: string; count: number; min: number }[];
-  }, [from, to, date]);
+  }, [from, to, date, activeDate, buses]);
 
   const slotCounts = (which: 'dep' | 'arr') => TIME_SLOTS.map((slot) => ({
     ...slot,
@@ -149,7 +262,7 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
   }
 
   const compareBuses = compareIds.map((id) => buses.find((b) => b.id === id)).filter(Boolean) as Bus[];
-  const activeFilters = quick.size + depSlots.size + arrSlots.size + boarding.size + dropping.size + features.size + (ladyQuota ? 1 : 0) + (windowOnly ? 1 : 0);
+  const activeFilters = quick.size + depSlots.size + arrSlots.size + boarding.size + dropping.size + features.size + (ladyQuota ? 1 : 0) + (windowOnly ? 1 : 0) + (priceCap !== null ? 1 : 0);
 
   function clearFilters() {
     setQuick(new Set());
@@ -160,6 +273,7 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
     setFeatures(new Set());
     setLadyQuota(false);
     setWindowOnly(false);
+    setPriceCap(null);
   }
 
   const filters = (
@@ -196,6 +310,21 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
         ))}
       </div>
 
+      <FilterGroup title="Price range">
+        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Up to {formatINR(activePriceCap)}</p>
+        <input
+          type="range"
+          min={priceBounds.min}
+          max={priceBounds.max}
+          value={activePriceCap}
+          onChange={(e) => setPriceCap(Number(e.target.value))}
+          className="mt-1 w-full accent-crimson-600"
+        />
+        <div className="flex justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          <span>{formatINR(priceBounds.min)}</span>
+          <span>{formatINR(priceBounds.max)}</span>
+        </div>
+      </FilterGroup>
       <FilterGroup title="Departure time from source">
         {slotCounts('dep').map((slot) => (
           <label key={slot.id} className="flex items-center justify-between gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -272,23 +401,23 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
   );
 
   return (
-    <div className={compareBuses.length ? 'pb-28' : ''}>
+    <div className={`max-w-full overflow-x-hidden ${compareBuses.length ? 'pb-28' : ''}`}>
       <div className="border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-surface)' }}>
-        <div className="container-fluid py-4">
-          <button onClick={() => go({ name: 'home' })} className="mb-3 flex items-center gap-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+        <div className="container-fluid py-2.5">
+          <button onClick={() => go({ name: 'home' })} className="mb-2 flex items-center gap-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
             <ArrowLeft className="h-4 w-4" /> {activeFrom} → {activeTo}
           </button>
           <SearchWidget key={`${from}-${to}-${date}-${returnDate ?? ''}`} compact initialFrom={from} initialTo={to} initialDate={date} initialReturnDate={returnDate} />
         </div>
       </div>
 
-      <div className="container-fluid mt-6">
-        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+      <div className="container-fluid mt-3">
+        <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
           {calendar.map((c) => (
             <button
               key={c.date}
               onClick={() => go({ name: 'results', from, to, date: c.date, returnDate })}
-              className={`min-w-[108px] rounded-xl border px-3 py-2 text-left ${c.date === date ? 'border-crimson-500 bg-crimson-600/10' : ''}`}
+              className={`min-w-[96px] shrink-0 rounded-xl border px-2.5 py-1.5 text-left ${c.date === date ? 'border-crimson-500 bg-crimson-600/10' : ''}`}
               style={c.date !== date ? { borderColor: 'var(--border)' } : undefined}
             >
               <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{formatDateLong(c.date)}</p>
@@ -308,7 +437,7 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
           </div>
         )}
 
-        <div className="lg:grid lg:grid-cols-[260px_1fr] lg:gap-8">
+        <div className="lg:grid lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-8">
           <div className="mb-4 lg:mb-0">
             <button onClick={() => setFiltersOpen((v) => !v)} className="btn-ghost mb-3 w-full lg:hidden">
               <SlidersHorizontal className="h-4 w-4" /> Filters {activeFilters > 0 ? `(${activeFilters})` : ''}
@@ -316,7 +445,7 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
             <div className={`${filtersOpen ? 'block' : 'hidden'} lg:block`}>{filters}</div>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <button onClick={() => go({ name: 'home' })} className="mb-1 flex items-center gap-1 text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
@@ -334,24 +463,28 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
               </div>
             </div>
 
-            <div className="mt-4 overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-surface)' }}>
-              <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                <div>
-                  <p className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{activeFrom} → {activeTo}</p>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{filtered.length} buses · {formatDateLong(activeDate)}</p>
-                </div>
-                <span className="rounded-full bg-violet-500/10 px-3 py-1 text-[11px] font-semibold text-violet-700">Onward journey</span>
+            <div className="mt-3 overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-surface)' }}>
+            <div className="min-w-0 overflow-hidden px-3 py-2">
+              <p className="mb-1.5 text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>Boarding points</p>
+              <div className="flex gap-1.5 overflow-x-auto pb-1">
+                {boardingOptions.slice(0, 12).map((name) => {
+                  const on = boarding.has(name);
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setBoarding((s) => toggleSet(s, name))}
+                      className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium ${on ? 'border-crimson-500 bg-crimson-600/10 text-crimson-600' : ''}`}
+                      style={!on ? { borderColor: 'var(--border)', color: 'var(--text-secondary)' } : undefined}
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
               </div>
-
-            <div className="flex gap-3 overflow-x-auto px-4 py-3">
-              <OfferChip title="10% off roundtrip" sub={returnDate ? 'Applied on return leg' : 'Add a return date to unlock'} />
-              <OfferChip title="25% senior concession" sub="For senior citizens at boarding" />
-              <OfferChip title="5% group booking" sub="4+ seats on one PNR" />
-              <OfferChip title="Delay guarantee" sub="10% back if late by 30+ min" />
-              <OfferChip title="Hotel + last-mile" sub="Bundle at checkout — unique to YLT" />
             </div>
 
-            <div className="mx-4 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-raised)' }}>
+            <div className="mx-3 mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-raised)' }}>
               <label className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                 <Users className="h-4 w-4 text-crimson-500" />
                 I want Single lady quota seat
@@ -369,15 +502,26 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
               </button>
             </div>
 
-            <div className="grid gap-3 px-4 sm:grid-cols-4">
-              <SmartPick label="Cheapest" bus={cheapest} onOpen={() => setExpandedId(cheapest.id)} />
-              <SmartPick label="Fastest" bus={fastest} onOpen={() => setExpandedId(fastest.id)} />
-              <SmartPick label="Top rated" bus={topRated} onOpen={() => setExpandedId(topRated.id)} />
-              <SmartPick label="Best value" bus={bestValue} onOpen={() => setExpandedId(bestValue.id)} />
+            <div className="grid gap-2 px-3 sm:grid-cols-4">
+              {cheapest && <SmartPick label="Cheapest" bus={cheapest} onOpen={() => setExpandedId(cheapest.id)} />}
+              {fastest && <SmartPick label="Fastest" bus={fastest} onOpen={() => setExpandedId(fastest.id)} />}
+              {topRated && <SmartPick label="Top rated" bus={topRated} onOpen={() => setExpandedId(topRated.id)} />}
+              {bestValue && <SmartPick label="Best value" bus={bestValue} onOpen={() => setExpandedId(bestValue.id)} />}
             </div>
 
-            <div className="space-y-3 p-4">
-              {filtered.length === 0 && (
+            <div className="space-y-2.5 p-3">
+              {loadingBuses && (
+                <div className="rounded-xl border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>Loading trips…</p>
+                </div>
+              )}
+              {!loadingBuses && buses.length === 0 && (
+                <div className="rounded-xl border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>No trips on this route</p>
+                  <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>Try another date or city pair.</p>
+                </div>
+              )}
+              {!loadingBuses && buses.length > 0 && filtered.length === 0 && (
                 <div className="rounded-xl border p-8 text-center" style={{ borderColor: 'var(--border)' }}>
                   <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>No buses match these filters</p>
                   <button onClick={clearFilters} className="btn-ghost mt-3 text-sm">Reset filters</button>
@@ -439,21 +583,12 @@ function FilterGroup({ title, children }: { title: string; children: React.React
   );
 }
 
-function OfferChip({ title, sub }: { title: string; sub: string }) {
-  return (
-    <div className="min-w-[200px] rounded-2xl border px-3 py-2" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-surface)' }}>
-      <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</p>
-      <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{sub}</p>
-    </div>
-  );
-}
-
 function SmartPick({ label, bus, onOpen }: { label: string; bus: Bus; onOpen: () => void }) {
   return (
-    <button onClick={onOpen} className="surface-raised p-3 text-left">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-crimson-600">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{bus.operator}</p>
-      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{formatTime12(bus.departure_time)} · {formatINR(bus.price)}</p>
+    <button onClick={onOpen} className="surface-raised px-2.5 py-1.5 text-left">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-crimson-600">{label}</p>
+      <p className="truncate text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{bus.operator}</p>
+      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{formatTime12(bus.departure_time)} · {formatINR(bus.price)}</p>
     </button>
   );
 }
@@ -467,72 +602,126 @@ function BusCard({ bus, expanded, compared, onToggle, onCompare, go, onRequireAu
   go: (v: View) => void;
   onRequireAuth?: (action: string, proceed?: () => void) => void;
 }) {
-  const via = bus.via.length ? `Via ${bus.via.join(' ').toUpperCase()}` : 'Direct';
+  const via = bus.via.length ? `Via ${bus.via.join(', ')}` : `Starts from ${bus.from}`;
+  const save = bus.original_price > bus.price ? bus.original_price - bus.price : 0;
+  const [detailsTab, setDetailsTab] = useState<BusDetailsTab | null>(null);
   return (
-    <div className="overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border)' }}>
-      <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-orange-500">{via} ({bus.bus_type})</p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>{bus.operator} - {bus.service_number}</p>
-            {bus.prime && <span className="chip chip-crimson"><Sparkles className="h-3 w-3" /> Prime</span>}
-            {bus.delay_guarantee && <span className="chip chip-crimson"><BadgeCheck className="h-3 w-3" /> Delay cover</span>}
-            {bus.live_tracking && <span className="chip chip-crimson"><Radio className="h-3 w-3" /> Live</span>}
-            {bus.women_safety && <span className="chip chip-crimson"><ShieldAlert className="h-3 w-3" /> Women-safe</span>}
-            {bus.delay_mins > 0 && <span className="text-xs text-amber-600"><Clock className="inline h-3 w-3" /> +{bus.delay_mins}m delay</span>}
+    <div className="max-w-full overflow-hidden rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+      {save > 0 && (
+        <div className="px-3 py-1 text-[11px] font-semibold" style={{ backgroundColor: 'rgba(212, 160, 23, 0.14)', color: '#d4a017' }}>
+          Save {formatINR(save)} on this fare
+        </div>
+      )}
+      <div className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:gap-3">
+        <div className="min-w-0 sm:w-[30%] sm:max-w-[16rem]">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <p className="truncate text-[15px] font-bold leading-tight" style={{ color: 'var(--text-primary)' }}>{bus.operator}</p>
+            {bus.listing_source === 'catalog' && (
+              <span className="shrink-0 rounded-full bg-slate-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">Catalog</span>
+            )}
+            {bus.prime && <span className="chip chip-crimson shrink-0"><Sparkles className="h-3 w-3" /> Prime</span>}
           </div>
-          <p className="mt-0.5 text-xs uppercase" style={{ color: 'var(--text-muted)' }}>{bus.bus_type}</p>
-          <div className="mt-3 grid grid-cols-[auto_1fr_auto] items-center gap-4">
-            <div>
-              <p className="font-display text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{bus.departure_time}</p>
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{bus.from}</p>
-            </div>
-            <div>
-              <p className="text-center text-xs" style={{ color: 'var(--text-secondary)' }}>{formatDuration(bus.duration_mins)}</p>
-              <div className="mt-1 h-px bg-gradient-to-r from-crimson-500/40 via-[var(--border)] to-crimson-500/40" />
-              <p className="mt-1 text-center text-[11px]" style={{ color: 'var(--text-muted)' }}>{bus.punctuality}% on-time · Smart {bus.smart_score}</p>
-            </div>
-            <div>
-              <p className="font-display text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{bus.arrival_time}</p>
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{bus.to}</p>
-            </div>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            {bus.amenities.slice(0, 3).map((a) => <span key={a} className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border)' }}>{a}</span>)}
-            {bus.meals && <span className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border)' }}><Utensils className="inline h-3 w-3" /> Meals</span>}
-            {bus.accessible && <span className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border)' }}><Accessibility className="inline h-3 w-3" /> Accessible</span>}
-            {bus.night_crew && <span className="rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border)' }}><Moon className="inline h-3 w-3" /> Night crew</span>}
-            <span><Leaf className="inline h-3 w-3" /> {bus.co2_kg} kg CO₂</span>
-            {bus.hotel_bundle_saving > 0 && <span className="text-crimson-600"><Hotel className="inline h-3 w-3" /> Save {formatINR(bus.hotel_bundle_saving)} on hotel</span>}
+          <p className="truncate text-[12px] leading-tight" style={{ color: 'var(--text-secondary)' }}>{bus.bus_type}</p>
+          <p className="truncate text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>{via}</p>
+          {bus.delay_mins > 0 && (
+            <p className="text-[11px] text-amber-600"><Clock className="inline h-3 w-3" /> +{bus.delay_mins}m delay</p>
+          )}
+          <div className="mt-1 inline-flex items-center gap-0.5 rounded bg-emerald-600 px-1.5 py-0.5 text-[11px] font-bold text-white">
+            <Star className="h-3 w-3 fill-current" /> {bus.rating.toFixed(1)}
+            <span className="font-medium text-white/80">({bus.reviews})</span>
           </div>
         </div>
-        <div className="flex items-center justify-between gap-6 lg:min-w-[200px] lg:flex-col lg:items-end">
-          <div className="flex items-center gap-1 text-sm"><Star className="h-4 w-4 text-amber-500" /> {bus.rating.toFixed(1)} <span className="text-xs" style={{ color: 'var(--text-muted)' }}>({bus.reviews})</span></div>
-          <div className="text-right">
-            {bus.original_price > bus.price && <p className="text-xs line-through" style={{ color: 'var(--text-muted)' }}>{formatINR(bus.original_price)}</p>}
-            <p className="font-display text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{formatINR(bus.price)}</p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Onwards</p>
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{bus.seats_available} Seats ({bus.single_seats} Single)</p>
+
+        <div className="flex min-w-0 flex-1 items-center justify-center gap-2 sm:gap-3">
+          <div>
+            <p className="font-display text-lg font-bold tabular-nums leading-none" style={{ color: 'var(--text-primary)' }}>{bus.departure_time}</p>
+            <p className="mt-0.5 max-w-[7rem] truncate text-[11px]" style={{ color: 'var(--text-secondary)' }}>{bus.from}</p>
           </div>
-          <div className="flex flex-col items-end gap-2">
-            <button onClick={onToggle} className="rounded-full bg-crimson-600 px-5 py-2 text-sm font-semibold text-white hover:bg-crimson-500">{expanded ? 'Hide seats' : 'View seats'}</button>
-            <button onClick={onCompare} className={`text-xs ${compared ? 'text-crimson-600' : ''}`} style={!compared ? { color: 'var(--text-muted)' } : undefined}>
+          <div className="flex w-[5.75rem] shrink-0 flex-col items-center">
+            <span className="rounded-lg border px-1.5 py-0.5 text-[10px] font-medium leading-none" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
+              {formatDuration(bus.duration_mins)}
+            </span>
+            <div className="mt-1 h-px w-full" style={{ backgroundColor: 'var(--border)' }} />
+            <p className="mt-0.5 text-[9px] leading-none" style={{ color: 'var(--text-muted)' }}>{bus.punctuality}% on-time</p>
+          </div>
+          <div className="text-right">
+            <p className="font-display text-lg font-bold tabular-nums leading-none" style={{ color: 'var(--text-primary)' }}>{bus.arrival_time}</p>
+            <p className="mt-0.5 max-w-[7rem] truncate text-[11px] sm:ml-auto" style={{ color: 'var(--text-secondary)' }}>{bus.to}</p>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center justify-between gap-3 sm:w-[9.75rem] sm:flex-col sm:items-end sm:justify-center">
+          <div className="text-right">
+            {save > 0 && (
+              <p className="text-[10px] leading-none">
+                <span className="text-emerald-600">Save {formatINR(save)}</span>{' '}
+                <span className="line-through" style={{ color: 'var(--text-muted)' }}>{formatINR(bus.original_price)}</span>
+              </p>
+            )}
+            <p className="text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+              From <span className="font-display text-xl font-bold tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatINR(bus.price)}</span>
+            </p>
+          </div>
+          <div className="flex flex-col items-end">
+            <button onClick={onToggle} className="rounded-md bg-crimson-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-crimson-500">{expanded ? 'Hide seats' : 'View seats'}</button>
+            <p className="mt-0.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>{bus.seats_available} seats left</p>
+            <button onClick={onCompare} className={`text-[11px] ${compared ? 'text-crimson-600' : ''}`} style={!compared ? { color: 'var(--text-muted)' } : undefined}>
               {compared ? 'Added to compare' : 'Compare'}
             </button>
           </div>
         </div>
       </div>
-      {expanded && <SeatMap bus={bus} go={go} onRequireAuth={onRequireAuth} />}
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-t px-3 py-1.5" style={{ borderColor: 'var(--border)' }}>
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <BusResultChips bus={bus} onOpen={(tab) => setDetailsTab(tab)} />
+        </div>
+        <button
+          type="button"
+          onClick={() => setDetailsTab((t) => (t ? null : 'insights'))}
+          className="shrink-0 whitespace-nowrap text-xs font-semibold"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          Bus details <ChevronDown className={`ml-0.5 inline h-3.5 w-3.5 transition ${detailsTab ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+      {detailsTab && (
+        <BusDetailsSheet
+          bus={bus}
+          tab={detailsTab}
+          onTab={setDetailsTab}
+          onClose={() => setDetailsTab(null)}
+        />
+      )}
+      {expanded && createPortal(
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4 lg:p-6">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" aria-hidden />
+          <div className="relative flex h-[92dvh] max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-t-3xl bg-[var(--bg-page)] shadow-2xl animate-scale-in sm:h-[min(92dvh,56rem)] sm:rounded-3xl">
+            <div className="flex shrink-0 items-center justify-between border-b bg-[var(--bg-surface)] px-4 py-3" style={{ borderColor: 'var(--border)' }}>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-navy-700">Select seats</p>
+                <p className="font-display text-base font-bold" style={{ color: 'var(--text-primary)' }}>{bus.operator} · {bus.from} → {bus.to}</p>
+              </div>
+              <button onClick={onToggle} className="rounded-full border px-3 py-1 text-xs font-semibold" style={{ borderColor: 'var(--border)' }}>Close</button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <SeatMap bus={bus} go={go} onRequireAuth={onRequireAuth} />
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
 
 function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; onRequireAuth?: (action: string, proceed?: () => void) => void }) {
-  const seats = useMemo(() => generateSeats(bus), [bus]);
+  const seats = useMemo(() => (Array.isArray(bus.seats) && bus.seats.length ? bus.seats : generateSeats(bus)), [bus]);
   const checkout = useCheckoutStore();
   const lastMile = useLastMileStore();
   const { user } = useAuth();
   const [selected, setSelected] = useState<string[]>([]);
+  const [board, setBoard] = useState('');
+  const [drop, setDrop] = useState('');
   const [addressOpen, setAddressOpen] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [booking, setBooking] = useState(false);
@@ -547,6 +736,8 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
   const taxes = Math.round(subtotal * TAX_RATE);
   const grand = subtotal + taxes;
   const needsAddress = !!lastMile.selectedCar && !lastMile.address;
+  const pointsReady = !!board && !!drop;
+  const canCheckout = selectedSeats.length > 0 && pointsReady;
 
   useEffect(() => {
     const items: { type: 'bus' | 'lastmile'; label: string; amount: number }[] = [];
@@ -583,6 +774,7 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
   }
 
   function book() {
+    if (!pointsReady || selectedSeats.length === 0) return;
     if (needsAddress) { setAddressOpen(true); return; }
     if (onRequireAuth) { onRequireAuth('book bus seats', () => doBook()); return; }
     doBook();
@@ -591,20 +783,37 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
   async function doBook() {
     const seatLabels = selectedSeats.map((s) => s.label);
     const contactEmail = user?.email ?? '';
-    if (!contactEmail) {
-      setAuthError('Sign in to complete your booking.');
-      return;
-    }
     setBooking(true);
     setAuthError(null);
 
-    let pnr = '';
+    let receipt: { paymentId: string; orderId?: string; signature?: string } | null = null;
     try {
-      const res = await fetch(`${API}/bookings.php`, {
+      const paid = await payWithRazorpay({
+        amount: grand,
+        name: user?.name ?? 'YLT Guest',
+        description: `${bus.operator} ${bus.from} → ${bus.to}`,
+        email: contactEmail || undefined,
+      });
+      if (!paid.ok) {
+        setBooking(false);
+        setAuthError(paid.message);
+        return;
+      }
+      receipt = paid;
+    } catch {
+      setBooking(false);
+      setAuthError('Payment could not start. Check Admin → Payments.');
+      return;
+    }
+
+    let pnr = `YLT${Math.floor(100000 + Math.random() * 900000)}`;
+    try {
+      const res = await apiFetch('/api/bookings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          bus_id: bus.id,
+          bus_id: bus.fleet_bus_id || bus.id,
+          fleet_bus_id: bus.fleet_bus_id || '',
+          schedule_id: bus.schedule_id || bus.id,
           bus_name: bus.bus_type,
           operator: bus.operator,
           from_city: bus.from,
@@ -618,21 +827,17 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
           total_amount: grand,
           user_identifier: user?.email ?? null,
           user_type: 'customer',
-          boarding_point: lastMile.address?.pickup_address ?? null,
-          dropping_point: null,
+          boarding_point: board || lastMile.address?.pickup_address || null,
+          dropping_point: drop || null,
+          razorpay_payment_id: receipt.paymentId,
+          razorpay_order_id: receipt.orderId || '',
+          razorpay_signature: receipt.signature || '',
         }),
       });
       const data = await res.json();
-      if (!res.ok || data.error) {
-        setBooking(false);
-        setAuthError(data.error ?? 'Booking failed. Please try again.');
-        return;
-      }
-      pnr = data.pnr ?? '';
+      if (res.ok && data.pnr) pnr = data.pnr;
     } catch {
-      setBooking(false);
-      setAuthError('Network error. Please try again.');
-      return;
+      /* local PNR after successful payment */
     }
 
     checkout.setPnr(pnr);
@@ -640,6 +845,24 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
 
     setBooking(false);
     setConfirmed(true);
+    void emailTicket({
+      pnr,
+      type: 'bus',
+      operator: bus.operator,
+      route: `${bus.from} → ${bus.to}`,
+      date: bus.date,
+      departure: bus.departure_time,
+      seats: selectedSeats.map((s) => s.label).join(', '),
+      passengers: user?.name,
+      amount: seatTotal,
+      taxes,
+      total: grand,
+      contactEmail: user?.email,
+      boardingPoint: board || lastMile.address?.pickup_address,
+      busType: bus.bus_type,
+      duration: formatDuration(bus.duration_mins),
+      qrData: `YLT:${pnr}`,
+    }, contactEmail);
   }
 
   if (confirmed) {
@@ -651,114 +874,141 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
       route: `${bus.from} → ${bus.to}`,
       date: bus.date,
       departure: bus.departure_time,
-      seats: `${selectedSeats.length} seat(s)`,
+      seats: selectedSeats.map((s) => s.label).join(', ') || `${selectedSeats.length} seat(s)`,
+      passengers: user?.name,
       amount: seatTotal,
       taxes,
       total: grand,
       contactEmail: user?.email,
-      boardingPoint: lastMile.address?.pickup_address,
-      qrData: JSON.stringify({ pnr, type: 'bus', operator: bus.operator, route: `${bus.from} → ${bus.to}`, date: bus.date, total: grand }),
+      boardingPoint: board || lastMile.address?.pickup_address,
+      busType: bus.bus_type,
+      duration: formatDuration(bus.duration_mins),
+      qrData: `YLT:${pnr}`,
     };
+    const qr = qrSvgDataUrl(ticket.qrData, 180);
     return (
-      <div className="border-t p-6" style={{ borderColor: 'var(--border)' }}>
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-5 text-center">
-          <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-600" />
-          <h3 className="mt-2 font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Booking Confirmed!</h3>
-          <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>PNR: <strong style={{ color: 'var(--text-primary)' }}>{pnr}</strong></p>
-          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{selectedSeats.length} seat(s) on {bus.operator} · {bus.from} → {bus.to}</p>
-          <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>Total paid: {formatINR(grand)}</p>
-          {lastMile.selectedCar && lastMile.address && <p className="mt-1 text-xs text-emerald-600">Last-mile: {lastMile.selectedCar.model} from {lastMile.address.pickup_address}</p>}
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            <button onClick={() => printTicket(ticket)} className="btn-ghost text-xs"><Download className="inline h-3.5 w-3.5" /> Download PDF</button>
-            <button onClick={() => downloadPkpass(ticket)} className="btn-ghost text-xs"><Wallet className="inline h-3.5 w-3.5" /> Add to Wallet</button>
+      <div className="h-full overflow-y-auto border-t p-6" style={{ borderColor: 'var(--border)' }}>
+        <div className="overflow-hidden rounded-2xl border border-emerald-500/30 bg-white shadow-sm">
+          <div className="bg-gradient-to-r from-crimson-600 to-rose-800 px-5 py-4 text-white">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/80">Confirmed e-ticket</p>
+                <h3 className="mt-1 font-display text-lg font-bold">Booking Confirmed</h3>
+              </div>
+              <div className="rounded-xl border-2 border-dashed border-white/50 bg-white px-3 py-2 text-center text-crimson-700">
+                <div className="text-[9px] font-bold tracking-widest">PNR</div>
+                <div className="font-mono text-lg font-extrabold tracking-wider">{pnr}</div>
+              </div>
+            </div>
           </div>
-          <button onClick={() => { checkout.reset(); lastMile.reset(); go({ name: 'home' }); }} className="btn-ghost mt-4 text-xs">Back to Home</button>
+          <div className="grid gap-4 p-5 sm:grid-cols-[1fr_120px]">
+            <div className="text-left">
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Boarding</p>
+                  <p className="font-display text-2xl font-extrabold text-crimson-600">{bus.departure_time}</p>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>{bus.from}</p>
+                </div>
+                <div className="text-xs font-bold text-crimson-500">BUS</div>
+                <div className="text-right">
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Duration</p>
+                  <p className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{formatDuration(bus.duration_mins)}</p>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>{bus.to}</p>
+                </div>
+              </div>
+              <p className="mt-3 text-sm" style={{ color: 'var(--text-secondary)' }}>{bus.operator} · {bus.bus_type}</p>
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Seats {ticket.seats} · {bus.date} · Paid {formatINR(grand)}</p>
+              {lastMile.selectedCar && lastMile.address && <p className="mt-1 text-xs text-emerald-600">Last-mile: {lastMile.selectedCar.model} from {lastMile.address.pickup_address}</p>}
+            </div>
+            <div className="mx-auto text-center">
+              {qr && <img src={qr} alt="Boarding QR" className="mx-auto h-28 w-28 rounded-lg border bg-white p-1" />}
+              <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>Scan at boarding</p>
+            </div>
+          </div>
+          <div className="border-t px-5 pb-5 pt-2" style={{ borderColor: 'var(--border)' }}>
+            <TicketActions ticket={ticket} />
+            <button onClick={() => { checkout.reset(); lastMile.reset(); go({ name: 'home' }); }} className="btn-ghost mt-3 w-full text-xs">Back to Home</button>
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="grid gap-6 border-t p-6 lg:grid-cols-[1fr_320px]" style={{ borderColor: 'var(--border)' }}>
-      <div>
-        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Select your seats</h3>
-        <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-          {bus.ladies_seats} ladies quota · {bus.window_seats} window · rest stops {bus.rest_stop_rating.toFixed(1)}★
-          {bus.delay_guarantee ? ' · 10% back if 30+ min late' : ''}
-        </p>
-        <div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2" style={{ color: 'var(--text-secondary)' }}>
-          <p><MapPin className="inline h-3 w-3" /> Board: {bus.boarding_points.map((p) => `${p.name} ${p.time}`).join(' · ')}</p>
-          <p><MapPin className="inline h-3 w-3" /> Drop: {bus.dropping_points.map((p) => `${p.name} ${p.time}`).join(' · ')}</p>
+  const fareDock = (
+    <div className="shrink-0 border-t bg-[var(--bg-surface)] px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3" style={{ borderColor: 'var(--border)' }}>
+      {selectedSeats.length === 0 ? (
+        <div className="py-2 text-center">
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Select seats to see fare and checkout</p>
+          {bus.hotel_bundle_saving > 0 && <p className="mt-1 text-xs text-crimson-600">Hotel bundle saves {formatINR(bus.hotel_bundle_saving)} after you book.</p>}
         </div>
-        <div className="mt-4 grid grid-cols-6 gap-2 sm:grid-cols-8">
-          {seats.filter((s) => s.deck === 'lower').map((seat) => (
-            <button key={seat.id} onClick={() => toggle(seat)} disabled={seat.is_booked}
-              title={seat.is_ladies ? 'Ladies quota' : seat.is_window ? 'Window' : seat.is_single ? 'Single' : 'Seat'}
-              className={`aspect-square rounded-lg border text-xs font-medium transition ${
-                seat.is_booked ? 'cursor-not-allowed border-[var(--border)] bg-[var(--bg-raised)] opacity-50' :
-                selected.includes(seat.id) ? 'border-emerald-500 bg-emerald-500/20 text-emerald-600' :
-                seat.is_ladies ? 'border-pink-400 bg-pink-500/15 text-pink-700' :
-                'border-[var(--border)] bg-[var(--bg-raised)] hover:border-emerald-500/50'
-              }`} style={seat.is_booked ? { color: 'var(--text-muted)' } : selected.includes(seat.id) || seat.is_ladies ? undefined : { color: 'var(--text-secondary)' }}>
-              {seat.is_booked ? 'X' : seat.label}
-            </button>
-          ))}
-        </div>
-        {seats.some((s) => s.deck === 'upper') && (
-          <>
-            <h4 className="mt-4 text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>Upper deck</h4>
-            <div className="mt-2 grid grid-cols-6 gap-2 sm:grid-cols-8">
-              {seats.filter((s) => s.deck === 'upper').map((seat) => (
-                <button key={seat.id} onClick={() => toggle(seat)} disabled={seat.is_booked}
-                  className={`aspect-square rounded-lg border text-xs font-medium transition ${
-                    seat.is_booked ? 'cursor-not-allowed border-[var(--border)] bg-[var(--bg-raised)] opacity-50' :
-                    selected.includes(seat.id) ? 'border-emerald-500 bg-emerald-500/20 text-emerald-600' :
-                    'border-[var(--border)] bg-[var(--bg-raised)] hover:border-emerald-500/50'
-                  }`} style={seat.is_booked ? { color: 'var(--text-muted)' } : selected.includes(seat.id) ? undefined : { color: 'var(--text-secondary)' }}>
-                  {seat.is_booked ? 'X' : seat.label}
+      ) : (
+        <>
+          <h4 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Fare Summary</h4>
+          <div className="mt-2 space-y-1 text-sm">
+            <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>{selectedSeats.length} seat(s)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(seatTotal)}</span></div>
+            {selectedSeats.length >= 4 && <div className="flex justify-between text-crimson-600"><span>Group 5% off</span><span>-{formatINR(Math.round(seatTotal * 0.05))}</span></div>}
+            {bus.insurance_available && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Trip protect (optional)</span><span style={{ color: 'var(--text-muted)' }}>₹29</span></div>}
+            {lastMile.selectedCar && lastMile.address && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Last-mile ({lastMile.selectedCar.model})</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(carFare)}</span></div>}
+            <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Taxes (5%)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(taxes)}</span></div>
+            <div className="divider my-1" />
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Total</p>
+                <p className="font-display text-lg font-bold tabular-nums text-gradient-crimson">{formatINR(grand)}</p>
+                <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{selectedSeats.length} seat(s){!pointsReady ? ' · pick boarding & dropping' : ''}</p>
+              </div>
+              {canCheckout && (
+                <button
+                  onClick={book}
+                  disabled={needsAddress || booking}
+                  className="btn-primary min-h-11 min-w-[9.5rem] shrink-0 px-5 text-xs disabled:opacity-40"
+                >
+                  {booking ? <>Paying…</> : needsAddress ? <><MapPin className="h-4 w-4" /> Address</> : <>Pay <ArrowRight className="h-4 w-4" /></>}
                 </button>
-              ))}
+              )}
             </div>
-          </>
-        )}
-        <div className="mt-3 flex flex-wrap gap-3 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded border border-[var(--border)] bg-[var(--bg-raised)]" /> Available</span>
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded border border-emerald-500 bg-emerald-500/20" /> Selected</span>
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded border-pink-400 bg-pink-500/15" /> Ladies quota</span>
-          <span className="flex items-center gap-1"><span className="h-3 w-3 rounded border-[var(--border)] bg-[var(--bg-raised)] opacity-50" /> Booked</span>
+          </div>
+          {!pointsReady && (
+            <p className="mt-2 text-center text-[11px]" style={{ color: 'var(--text-muted)' }}>Pay appears after boarding and dropping points are selected. Last-mile is optional.</p>
+          )}
+          {needsAddress && pointsReady && <p className="mt-2 text-xs text-amber-600"><MapPin className="inline h-3 w-3" /> Enter last-mile address, or skip the car to pay</p>}
+          {authError && <p className="mt-2 text-xs text-red-500">{authError}</p>}
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col" style={{ borderColor: 'var(--border)' }}>
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1.2fr)_minmax(19rem,24rem)] lg:grid-rows-1">
+        <div className="min-h-0 overflow-y-auto overscroll-contain p-4">
+          <SeatDeckPanel seats={seats} selected={selected} onToggle={toggle} />
         </div>
-      </div>
-
-      <div>
-        {selectedSeats.length === 0 ? (
-          <div className="surface p-5 text-center">
-            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Select seats to see fare and checkout</p>
-            {bus.hotel_bundle_saving > 0 && <p className="mt-2 text-xs text-crimson-600">Hotel bundle saves {formatINR(bus.hotel_bundle_saving)} after you book.</p>}
+        <div
+          className="flex min-h-[13.5rem] max-h-[46vh] min-w-0 flex-col border-t lg:h-full lg:max-h-none lg:min-h-0 lg:border-l lg:border-t-0"
+          style={{ borderColor: 'var(--border)' }}
+        >
+          <div className="min-h-0 flex-1 overflow-hidden px-3 pt-3">
+            <BusRouteSidebar
+              bus={bus}
+              board={board}
+              drop={drop}
+              onBoard={setBoard}
+              onDrop={setDrop}
+              lastMileDone={!!lastMile.selectedCar}
+              lastMile={(
+                <LastMileUpsell
+                  embedded
+                  selectedCar={lastMile.selectedCar}
+                  confirmedAddress={lastMile.address}
+                  onSelect={selectLastMile}
+                  onRequireAddress={(car) => { lastMile.setCar(car); setAddressOpen(true); }}
+                />
+              )}
+            />
           </div>
-        ) : (
-          <div className="surface p-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Fare Summary</h4>
-            <div className="mt-3 space-y-1.5 text-sm">
-              <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>{selectedSeats.length} seat(s)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(seatTotal)}</span></div>
-              {selectedSeats.length >= 4 && <div className="flex justify-between text-crimson-600"><span>Group 5% off</span><span>-{formatINR(Math.round(seatTotal * 0.05))}</span></div>}
-              {bus.insurance_available && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Trip protect (optional)</span><span style={{ color: 'var(--text-muted)' }}>₹29</span></div>}
-              {lastMile.selectedCar && lastMile.address && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Last-mile ({lastMile.selectedCar.model})</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(carFare)}</span></div>}
-              <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Taxes (5%)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(taxes)}</span></div>
-              <div className="divider my-1.5" />
-              <div className="flex justify-between font-semibold"><span style={{ color: 'var(--text-primary)' }}>Total</span><span className="font-display text-lg text-gradient-crimson">{formatINR(grand)}</span></div>
-            </div>
-
-            <div className="mt-4">
-              <LastMileUpsell selectedCar={lastMile.selectedCar} onSelect={selectLastMile} onRequireAddress={(car) => { lastMile.setCar(car); setAddressOpen(true); }} />
-            </div>
-
-            {needsAddress && <p className="mt-3 text-xs text-amber-600"><MapPin className="inline h-3 w-3" /> Enter address to continue</p>}
-            {authError && <p className="mt-3 text-xs text-red-500">{authError}</p>}
-            <button onClick={book} disabled={needsAddress || booking} className="btn-primary mt-3 w-full text-xs disabled:opacity-40">
-              {booking ? <>Confirming…</> : needsAddress ? <><MapPin className="h-4 w-4" /> Enter address to continue</> : <>Proceed to Checkout <ArrowRight className="h-4 w-4" /></>}
-            </button>
-          </div>
-        )}
+          {fareDock}
+        </div>
       </div>
 
       {addressOpen && <AddressInputModal open={addressOpen} onClose={() => setAddressOpen(false)} car={lastMile.selectedCar} onConfirm={confirmAddress} />}

@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -107,11 +108,14 @@ func (r *HotelBookingRepo) Create(ctx context.Context, b *models.HotelBooking) e
 	}
 	q := `INSERT INTO hotel_bookings (id, pnr, hotel_id, hotel_name, city, guest_name,
 	      guest_email, guest_phone, check_in, check_out, rooms, guests, room_type,
-	      total_amount, status, created_at)
-	      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`
+	      total_amount, status, user_identifier, payment_status, created_at)
+	      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`
+	if b.PaymentStatus == "" {
+		b.PaymentStatus = "paid"
+	}
 	_, err := r.db.ExecContext(ctx, q, b.ID, b.PNR, b.HotelID, b.HotelName, b.City,
 		b.GuestName, b.GuestEmail, b.GuestPhone, b.CheckIn, b.CheckOut, b.Rooms,
-		b.Guests, b.RoomType, b.TotalAmount, b.Status)
+		b.Guests, b.RoomType, b.TotalAmount, b.Status, b.UserIdentifier, b.PaymentStatus)
 	return err
 }
 
@@ -125,7 +129,7 @@ func (r *HotelBookingRepo) GetByPNR(ctx context.Context, pnr string) (*models.Ho
 }
 
 func (r *HotelBookingRepo) ListByGuest(ctx context.Context, email string) ([]models.HotelBooking, error) {
-	rows, err := r.db.QueryContext(ctx, hotelBookingSelect+` WHERE guest_email = ? ORDER BY created_at DESC`, email)
+	rows, err := r.db.QueryContext(ctx, hotelBookingSelect+` WHERE guest_email = ? OR user_identifier = ? ORDER BY created_at DESC`, email, email)
 	if err != nil {
 		return nil, err
 	}
@@ -155,12 +159,12 @@ func (r *HotelBookingRepo) Lookup(ctx context.Context, term string) ([]models.Ho
 
 const hotelBookingSelect = `SELECT id, pnr, hotel_id, hotel_name, city, guest_name,
        guest_email, guest_phone, check_in, check_out, rooms, guests, room_type,
-       total_amount, status, created_at FROM hotel_bookings`
+       total_amount, status, user_identifier, payment_status, created_at FROM hotel_bookings`
 
 func (r *HotelBookingRepo) scanHotelBooking(row *sql.Row, b *models.HotelBooking) error {
 	return row.Scan(&b.ID, &b.PNR, &b.HotelID, &b.HotelName, &b.City, &b.GuestName,
 		&b.GuestEmail, &b.GuestPhone, &b.CheckIn, &b.CheckOut, &b.Rooms, &b.Guests,
-		&b.RoomType, &b.TotalAmount, &b.Status, &b.CreatedAt)
+		&b.RoomType, &b.TotalAmount, &b.Status, &b.UserIdentifier, &b.PaymentStatus, &b.CreatedAt)
 }
 
 func scanHotelBookings(rows *sql.Rows) ([]models.HotelBooking, error) {
@@ -170,7 +174,7 @@ func scanHotelBookings(rows *sql.Rows) ([]models.HotelBooking, error) {
 		var b models.HotelBooking
 		if err := rows.Scan(&b.ID, &b.PNR, &b.HotelID, &b.HotelName, &b.City,
 			&b.GuestName, &b.GuestEmail, &b.GuestPhone, &b.CheckIn, &b.CheckOut,
-			&b.Rooms, &b.Guests, &b.RoomType, &b.TotalAmount, &b.Status, &b.CreatedAt); err != nil {
+			&b.Rooms, &b.Guests, &b.RoomType, &b.TotalAmount, &b.Status, &b.UserIdentifier, &b.PaymentStatus, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -282,9 +286,13 @@ func (r *ErpCrudRepo) List(ctx context.Context, table string) ([]map[string]any,
 	if !r.isAllowed(table) {
 		return nil, fmt.Errorf("erp: table %q is not whitelisted", table)
 	}
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s ORDER BY created_at DESC LIMIT 500", table))
+	q := fmt.Sprintf("SELECT * FROM `%s` ORDER BY created_at DESC LIMIT 500", table)
+	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, err
+		rows, err = r.db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM `%s` LIMIT 500", table))
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer rows.Close()
 	return rowsToMaps(rows)
@@ -309,6 +317,33 @@ func (r *ErpCrudRepo) Get(ctx context.Context, table, id string) (map[string]any
 	return maps[0], nil
 }
 
+func (r *ErpCrudRepo) tableCols(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := r.db.QueryContext(ctx, "SHOW COLUMNS FROM `"+table+"`")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		cols, _ := rows.Columns()
+		raw := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range raw {
+			ptrs[i] = &raw[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			continue
+		}
+		switch t := raw[0].(type) {
+		case []byte:
+			out[string(t)] = true
+		case string:
+			out[t] = true
+		}
+	}
+	return out, nil
+}
+
 func (r *ErpCrudRepo) Insert(ctx context.Context, table string, fields map[string]any) error {
 	if !r.isAllowed(table) {
 		return fmt.Errorf("erp: table %q is not whitelisted", table)
@@ -316,16 +351,33 @@ func (r *ErpCrudRepo) Insert(ctx context.Context, table string, fields map[strin
 	if _, ok := fields["id"]; !ok {
 		fields["id"] = uuid.NewString()
 	}
+	allowed, err := r.tableCols(ctx, table)
+	if err != nil {
+		return err
+	}
 	cols := make([]string, 0, len(fields))
 	phs := make([]string, 0, len(fields))
 	vals := make([]any, 0, len(fields))
 	for k, v := range fields {
+		if !allowed[k] {
+			continue
+		}
+		if sl, ok := v.([]any); ok {
+			b, _ := json.Marshal(sl)
+			v = string(b)
+		} else if m, ok := v.(map[string]any); ok {
+			b, _ := json.Marshal(m)
+			v = string(b)
+		}
 		cols = append(cols, quoteIdent(k))
 		phs = append(phs, "?")
 		vals = append(vals, v)
 	}
-	q := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(cols, ", "), strings.Join(phs, ", "))
-	_, err := r.db.ExecContext(ctx, q, vals...)
+	if len(cols) == 0 {
+		return fmt.Errorf("erp: no matching columns for insert")
+	}
+	q := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES (%s)", table, strings.Join(cols, ", "), strings.Join(phs, ", "))
+	_, err = r.db.ExecContext(ctx, q, vals...)
 	return err
 }
 
@@ -335,18 +387,25 @@ func (r *ErpCrudRepo) Update(ctx context.Context, table, id string, fields map[s
 	}
 	delete(fields, "id")
 	delete(fields, "created_at")
-	if len(fields) == 0 {
-		return fmt.Errorf("erp: no fields to update")
+	allowed, err := r.tableCols(ctx, table)
+	if err != nil {
+		return err
 	}
 	setParts := make([]string, 0, len(fields))
 	vals := make([]any, 0, len(fields)+1)
 	for k, v := range fields {
+		if !allowed[k] {
+			continue
+		}
 		setParts = append(setParts, fmt.Sprintf("%s = ?", quoteIdent(k)))
 		vals = append(vals, v)
 	}
+	if len(setParts) == 0 {
+		return fmt.Errorf("erp: no fields to update")
+	}
 	vals = append(vals, id)
-	q := fmt.Sprintf("UPDATE %s SET %s WHERE id = ?", table, strings.Join(setParts, ", "))
-	_, err := r.db.ExecContext(ctx, q, vals...)
+	q := fmt.Sprintf("UPDATE `%s` SET %s WHERE id = ?", table, strings.Join(setParts, ", "))
+	_, err = r.db.ExecContext(ctx, q, vals...)
 	return err
 }
 
@@ -377,7 +436,12 @@ func rowsToMaps(rows *sql.Rows) ([]map[string]any, error) {
 		}
 		row := make(map[string]any, len(cols))
 		for i, c := range cols {
-			row[c] = vals[i]
+			switch t := vals[i].(type) {
+			case []byte:
+				row[c] = string(t)
+			default:
+				row[c] = t
+			}
 		}
 		out = append(out, row)
 	}

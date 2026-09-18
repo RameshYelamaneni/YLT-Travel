@@ -1,0 +1,33 @@
+RewriteEngine On
+RewriteBase /api/
+
+# Pass Bearer tokens through to PHP on Hostinger Apache.
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Serve real PHP files. Map Go-style paths onto the PHP scripts.
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^ - [L]
+
+RewriteRule ^auth(\.php)?(/.*)?$ auth.php [L,QSA]
+RewriteRule ^bookings(\.php)?(/.*)?$ bookings.php [L,QSA]
+RewriteRule ^erp(\.php)?(/.*)?$ erp.php [L,QSA]
+RewriteRule ^settings(\.php)?(/.*)?$ settings.php [L,QSA]
+RewriteRule ^install/?$ install.php [L,QSA]
+RewriteRule ^hotels(/.*)?$ bookings.php [L,QSA]
+RewriteRule ^buses(/.*)?$ bookings.php [L,QSA]
+RewriteRule ^hotel-bookings(/.*)?$ bookings.php [L,QSA]
+RewriteRule ^newsletter(/.*)?$ bookings.php [L,QSA]
+RewriteRule ^payments(/.*)?$ bookings.php [L,QSA]
+RewriteRule ^offers(\.php)?(/.*)?$ offers.php [L,QSA]
+RewriteRule ^templates(\.php)?(/.*)?$ templates.php [L,QSA]
+RewriteRule ^email-templates(/.*)?$ templates.php [L,QSA]
+RewriteRule ^v1/email-templates(/.*)?$ templates.php [L,QSA]
+RewriteRule ^directors(/.*)?$ settings.php [L,QSA]
+RewriteRule ^health/?$ settings.php [L,QSA]
+RewriteRule ^chat(\.php)?(/.*)?$ chat.php [L,QSA]
+RewriteRule ^pms(\.php)?(/.*)?$ pms.php [L,QSA]
+RewriteRule ^crm(\.php)?(/.*)?$ crm.php [L,QSA]
+RewriteRule ^uploads(\.php)?(/.*)?$ uploads.php [L,QSA]
+RewriteRule ^feedback(\.php)?(/.*)?$ feedback.php [L,QSA]
+RewriteRule ^ops(\.php)?(/.*)?$ ops.php [L,QSA]

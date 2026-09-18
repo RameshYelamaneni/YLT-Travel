@@ -1,14 +1,15 @@
 import { useMemo, useState, useEffect } from 'react';
 import {
-  Star, Clock, BadgeCheck, Check, MapPin, Filter, Shield, ArrowRight, Download, Mail, CheckCircle2, Zap, Car as CarIcon,
+  Star, Clock, BadgeCheck, Check, MapPin, Filter, Shield, ArrowRight, CheckCircle2, Zap, Car as CarIcon,
 } from 'lucide-react';
 import { mockCarRentals, MOCK_CITIES, calculateCarFare, type CarRentalOption, type CarRentalService } from '../data/mockCars';
 import { formatINR, formatTime12 } from '../lib/format';
 import { useCarStore } from '../store/carStore';
 import { useCheckoutStore } from '../store/checkoutStore';
 import { TAX_RATE, surgeMultiplier, currentPricingContext, airportFare } from '../lib/business';
-import { buildTicket, printTicket, type TicketData } from '../lib/ticket';
+import { buildTicket, type TicketData } from '../lib/ticket';
 import { recordBooking } from './MyBookingsPage';
+import TicketActions from './TicketActions';
 import type { View } from '../store/nav';
 
 const SERVICES: { id: CarRentalService; label: string }[] = [
@@ -213,8 +214,7 @@ function CarCheckout({ car, go, onRequireAuth }: { car: CarRentalOption; go: (v:
         <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{car.model} · {store.pickupAddress} → {store.dropoffAddress}</p>
         <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>Total: {formatINR(total)} (incl. surge {surge.toFixed(1)}x)</p>
         <div className="mt-4 space-y-2">
-          <button onClick={() => printTicket(ticket)} className="btn-primary w-full text-xs"><Download className="h-4 w-4" /> Download PDF Ticket</button>
-          <button onClick={() => alert('Confirmation email sent to your registered address.')} className="btn-ghost w-full text-xs"><Mail className="h-4 w-4" /> Email Confirmation</button>
+          <TicketActions ticket={ticket} />
           <button onClick={() => { checkout.reset(); go({ name: 'home' }); }} className="btn-ghost w-full text-xs">Back to Home</button>
         </div>
       </div>

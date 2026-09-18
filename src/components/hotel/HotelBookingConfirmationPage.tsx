@@ -90,7 +90,7 @@ export default function HotelBookingConfirmationPage({ booking, go }: { booking:
             <div className="flex justify-between text-xs"><span style={{ color: 'var(--text-muted)' }}>GST</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(booking.gst)}</span></div>
             <div className="flex justify-between border-t pt-3" style={{ borderColor: 'var(--border)' }}>
               <span className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>Total Paid</span>
-              <span className="text-lg font-bold text-crimson-500">{formatINR(booking.total)}</span>
+              <span className="text-lg font-bold text-navy-800">{formatINR(booking.total)}</span>
             </div>
             <div className="flex justify-between text-xs">
               <span style={{ color: 'var(--text-muted)' }}>Payment Method</span>
@@ -110,7 +110,7 @@ export default function HotelBookingConfirmationPage({ booking, go }: { booking:
             <Download className="h-4 w-4" /> Download Voucher
           </button>
           <button onClick={() => go({ name: 'home' })}
-            className="flex items-center justify-center gap-2 rounded-xl bg-crimson-600 py-3 text-sm font-semibold text-white transition hover:bg-crimson-700">
+            className="flex items-center justify-center gap-2 rounded-xl bg-gold-500 text-navy-950 hover:bg-gold-400">
             <Home className="h-4 w-4" /> Back to Home
           </button>
         </div>

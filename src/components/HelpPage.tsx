@@ -1,300 +1,275 @@
 import { useMemo, useState } from 'react';
 import {
-  Search, Navigation, Car, Shield, Briefcase, Sparkles, Mail, Globe, Lock,
-  Ticket, CreditCard, MapPin, Clock, Star, BadgeCheck, ShieldCheck, Zap, ChevronRight,
-  type LucideIcon,
+  Search, Headphones, Ticket, Ban, Wallet, Bus, Hotel, CreditCard, User,
+  Mail, Phone, ChevronDown, BookOpen,
 } from 'lucide-react';
 import type { View } from '../store/nav';
 
-interface Article {
+type TopicId = 'book' | 'cancel' | 'refund' | 'seats' | 'hotels' | 'payments' | 'account';
+
+interface Faq {
   id: string;
-  category: string;
-  icon: LucideIcon;
-  title: string;
-  summary: string;
-  body: string[];
+  topic: TopicId;
+  q: string;
+  a: string;
 }
 
-const ARTICLES: Article[] = [
+const TOPICS: { id: TopicId; label: string; hint: string; icon: typeof Ticket }[] = [
+  { id: 'book', label: 'Book', hint: 'Search, pay, PNR', icon: Ticket },
+  { id: 'cancel', label: 'Cancel', hint: 'Stop a confirmed trip', icon: Ban },
+  { id: 'refund', label: 'Refund', hint: 'Money back timelines', icon: Wallet },
+  { id: 'seats', label: 'Seats', hint: 'Pick and change seats', icon: Bus },
+  { id: 'hotels', label: 'Hotels', hint: 'Stays and check-in', icon: Hotel },
+  { id: 'payments', label: 'Payments', hint: 'UPI, cards, failed pay', icon: CreditCard },
+  { id: 'account', label: 'Account', hint: 'Sign in and bookings', icon: User },
+];
+
+const FAQS: Faq[] = [
   {
-    id: 'bus-booking',
-    category: 'Bus',
-    icon: Navigation,
-    title: 'Bus Bookings',
-    summary: 'Search and book AC/sleeper buses across 10+ South Indian cities with live seat maps and instant PNR.',
-    body: [
-      'YLT Transit aggregates intercity bus operators across Tamil Nadu, Karnataka, Kerala, Andhra Pradesh and Telangana. Search by origin, destination and date to see live availability.',
-      'Each result shows operator name, bus type (AC sleeper, AC seater, non-AC), departure/arrival times, duration, amenities (charging points, water, blankets), rating and fare.',
-      'Pick your seats from a live seat map — booked seats are disabled in real time. Choose boarding and dropping points, then proceed to checkout.',
-      'On payment success, a PNR is generated instantly and a digital ticket with QR code is available for download from My Bookings.',
-    ],
+    id: 'book-1', topic: 'book', q: 'How do I book a bus?',
+    a: 'Open Buses, enter from, to, and travel date, then choose a service and seats. Pay on the checkout screen. A PNR is created only after payment succeeds. You can open that PNR any time under Bookings with the same email.',
   },
   {
-    id: 'last-mile',
-    category: 'Bus',
-    icon: MapPin,
-    title: 'Last-Mile Car Pickup',
-    summary: 'Add a chauffeured car pickup from your drop point to your final destination, right from the bus checkout.',
-    body: [
-      'When booking a bus, YLT Transit offers an optional last-mile car pickup. A verified driver meets you at the bus drop point and drives you to your final address.',
-      'Pricing is surge-aware and calculated by distance from the drop point to your destination. You can add this during bus checkout.',
-      'You must provide a drop address via the address input modal. The car and driver details are shown on your ticket.',
-    ],
+    id: 'book-2', topic: 'book', q: 'Where do I find my ticket after paying?',
+    a: 'Go to Bookings and sign in or look up the PNR emailed to you. Keep the same email you used at checkout so the ticket stays attached to your account.',
   },
   {
-    id: 'car-booking',
-    category: 'Car',
-    icon: Car,
-    title: 'Car Bookings',
-    summary: 'Six rental modes — chauffeured, outstation, airport, hourly, subscription and self-drive.',
-    body: [
-      'YLT Transit offers six car rental modes to cover every travel need:',
-      '1. Chauffeured — a verified driver drives you in a rental car. Best for city trips and events.',
-      '2. Outstation — intercity trips with driver. Round-trip and one-way available.',
-      '3. Airport — pickup or drop to/from the airport with flight tracking.',
-      '4. Hourly — book a car with driver for a fixed number of hours within city limits.',
-      '5. Subscription — monthly car service for daily commutes. Billed monthly.',
-      '6. Self-Drive — rent a car and drive yourself. License verification required.',
-      'All cars come with insurance add-on options, surge-aware pricing, and downloadable PDF tickets.',
-    ],
+    id: 'book-3', topic: 'book', q: 'Can I book a hotel on YLT Travels too?',
+    a: 'Yes. Use Hotels, pick city and dates, then pay. Hotel confirmations also appear under Bookings. Bus and hotel bookings are separate PNRs even if you travel on the same trip.',
   },
   {
-    id: 'my-bookings',
-    category: 'Account',
-    icon: Ticket,
-    title: 'My Bookings & Tickets',
-    summary: 'View all your bus and car bookings. Download PDF tickets, view QR codes, and track status.',
-    body: [
-      'The My Bookings page shows every booking tied to your account — buses and cars — sorted by date.',
-      'Each booking card shows the PNR, route, date, time, seats, fare, and current status (Confirmed, Completed, Cancelled).',
-      'Download a PDF ticket with QR code for offline verification. The QR encodes the PNR and is scannable by operators.',
-      'Cancel eligible bookings from the booking card. Refunds are processed to the original payment method.',
-    ],
+    id: 'cancel-1', topic: 'cancel', q: 'How do I cancel a bus ticket?',
+    a: 'Open Bookings, select the PNR, and choose Cancel if the service still allows it. The amount you get back follows the cancellation window shown on that ticket. If Cancel is not offered, the operator has closed the window — email YLT Care with the PNR.',
   },
   {
-    id: 'payments',
-    category: 'Account',
-    icon: CreditCard,
-    title: 'Payments & Refunds',
-    summary: 'UPI, cards and wallets. Instant PNR, digital tickets, and refunds to original payment method.',
-    body: [
-      'YLT Transit supports UPI, credit/debit cards and popular wallets. All payments are processed through a PCI-compliant gateway.',
-      'On successful payment, your PNR is generated instantly and the booking is confirmed in real time.',
-      'Cancellation refunds are credited back to the original payment method within 3-5 business days, depending on your bank.',
-      'Fares include all taxes. The fare shown at checkout is the final amount — no hidden charges.',
-    ],
+    id: 'cancel-2', topic: 'cancel', q: 'What if the operator cancels the service?',
+    a: 'YLT Care will move the fare back to the original payment method. Watch the email on the booking. You do not need to file a second request unless the refund is missing after the usual bank window.',
   },
   {
-    id: 'auth',
-    category: 'Account',
-    icon: Lock,
-    title: 'Login & Authentication',
-    summary: 'Email OTP or password login for customers. 7-day sessions. OTP sent via email.',
-    body: [
-      'Customers can sign in with email OTP (passwordless) or with an email + password account. OTP codes are sent via email using SMTP.',
-      'Sessions last 7 days for customers and agent partners. You stay logged in across page refreshes.',
-      'If you forget your password, use the OTP login flow to access your account, then reset from profile settings.',
-    ],
+    id: 'cancel-3', topic: 'cancel', q: 'Can I change the travel date instead of cancelling?',
+    a: 'Date changes are not automatic. Cancel within the allowed window, then book the new date as a fresh ticket. Fare on the new date can differ.',
   },
   {
-    id: 'operator-erp',
-    category: 'ERP',
-    icon: Briefcase,
-    title: 'Operator ERP',
-    summary: 'Agent partners get a full ERP: fleet manager, expense ledger, driver roster, and AI dispatch assistant.',
-    body: [
-      'Agent partners (operators) get access to a full ERP via the ERP login tab in the login modal.',
-      'Fleet Manager — add, edit and track cars in your fleet. Each car has a type, capacity, rate and status.',
-      'Expense Ledger — log fuel, maintenance, tolls and other expenses per car. See profit/loss per vehicle.',
-      'Driver Roster — manage drivers assigned to your cars. Track licenses, ratings and assignments.',
-      'AI Dispatch Assistant — an AI-powered assistant that suggests optimal car-to-booking assignments based on location, availability and SLA.',
-      'Operator credentials are managed by core admins. Contact your admin if you need an ERP account.',
-    ],
+    id: 'refund-1', topic: 'refund', q: 'How long does a refund take?',
+    a: 'YLT Travels releases the refund to the original UPI or card as soon as the cancellation is confirmed. Banks usually post it in 3–7 working days. We do not hold a stored wallet balance.',
   },
   {
-    id: 'admin',
-    category: 'Admin',
-    icon: Shield,
-    title: 'Admin Panel',
-    summary: 'Core admins manage directors, agent partners, SMTP email settings, and app configuration.',
-    body: [
-      'The Admin Panel is for core admins only. Access it via the Admin tab in the header after logging in with admin credentials.',
-      'Directors — manage the leadership/director profiles shown on the site, including photos and bios.',
-      'Agent Partners — create and manage operator accounts who get ERP access.',
-      'SMTP Settings — configure the email server used to send OTP codes and booking confirmations.',
-      'App Settings — manage global app configuration like pricing, feature flags and branding.',
-      'Admin sessions auto-expire after 5 minutes of inactivity for security.',
-    ],
+    id: 'refund-2', topic: 'refund', q: 'Will I get a full refund?',
+    a: 'Full refunds apply when YLT or the operator cancels the trip. If you cancel, the ticket’s cancellation policy decides the amount. Charges already taken by the bank are not added back.',
   },
   {
-    id: 'security',
-    category: 'Platform',
-    icon: ShieldCheck,
-    title: 'Security & Privacy',
-    summary: 'JWT-based auth, RLS-protected database, encrypted sessions, and SLA-verified operators.',
-    body: [
-      'All authentication is JWT-based with signed tokens. Passwords are never stored in plain text.',
-      'The database is protected by Row Level Security (RLS) — users can only read and write their own data.',
-      'Every operator and car is SLA-verified: background checks, license verification, vehicle inspection and rating thresholds.',
-      'Payment data never touches our servers — it goes directly to the PCI-compliant payment gateway.',
-    ],
+    id: 'refund-3', topic: 'refund', q: 'The amount has not reached my account.',
+    a: 'Wait the bank window first. Then email care@ylttravels.com with PNR, payment reference, and the last four digits of the UPI or card. YLT Care traces the payout from there.',
   },
   {
-    id: 'about',
-    category: 'Platform',
-    icon: Sparkles,
-    title: 'About YLT Transit',
-    summary: 'An all-in-one transit operating system connecting buses and cars in one platform.',
-    body: [
-      'YLT Transit is an all-in-one transit operating system that connects intercity bus travel with last-mile car pickups, self-drive rentals, and hotel stays — all in a single platform.',
-      'Built for three audiences: travelers (customers), agent partners (operators), and core admins.',
-      'Travelers book buses and cars. Operators manage fleets and dispatch via the ERP. Admins manage the platform.',
-      'Coverage spans 10+ South Indian cities with 500+ daily buses and a growing car network.',
-    ],
+    id: 'seats-1', topic: 'seats', q: 'How do I pick seats?',
+    a: 'After you choose a service, the seat map shows open, taken, and ladies-only seats. Tap the seats you want, then continue to pay. Seats are held only after payment succeeds.',
+  },
+  {
+    id: 'seats-2', topic: 'seats', q: 'Can I change seats after booking?',
+    a: 'Seat changes are not self-serve. Email YLT Care with the PNR and the seats you want. We can move you only if those seats are still free on that service.',
+  },
+  {
+    id: 'seats-3', topic: 'seats', q: 'What if two tickets show the same seat?',
+    a: 'Do not board on an unclear seat. Write to care@ylttravels.com with both PNRs. YLT Care will confirm the assignment with the operator before departure.',
+  },
+  {
+    id: 'hotels-1', topic: 'hotels', q: 'How do I book a stay?',
+    a: 'Open Hotels, choose city and nights, pick a room, and pay. Your hotel PNR is listed under Bookings. Carry a government ID that matches the guest name at check-in.',
+  },
+  {
+    id: 'hotels-2', topic: 'hotels', q: 'How do hotel cancellations work?',
+    a: 'Each stay shows its own free-cancel time on the booking. Cancel from Bookings before that time for a refund to the original payment method. After the window, the stay is non-refundable.',
+  },
+  {
+    id: 'hotels-3', topic: 'hotels', q: 'The hotel asks for extra at the desk.',
+    a: 'Room fare paid on YLT Travels is prepaid. Extra beds, meals, or late checkout are settled at the property. If the desk asks you to pay the room again, email YLT Care with the PNR before you pay twice.',
+  },
+  {
+    id: 'pay-1', topic: 'payments', q: 'Which payments does YLT Travels accept?',
+    a: 'UPI and cards on the checkout page. There is no stored YLT wallet. Promo codes, when listed on Offers, are entered at pay — expired codes will not apply.',
+  },
+  {
+    id: 'pay-2', topic: 'payments', q: 'Payment failed but money left my account.',
+    a: 'Wait two minutes and check Bookings. If no PNR appears, the bank usually reverses the debit on its own. Do not pay a second time until you confirm there is no ticket. Still missing? Email the payment reference to YLT Care.',
+  },
+  {
+    id: 'pay-3', topic: 'payments', q: 'A promo code is not applying.',
+    a: 'Codes are case-sensitive and tied to dates, routes, or hotels. If Offers no longer lists the code, it has ended. YLT Care cannot revive an expired campaign.',
+  },
+  {
+    id: 'acc-1', topic: 'account', q: 'How do I see all my trips?',
+    a: 'Sign in and open Bookings. Tickets stay with the email used at checkout. If you booked as a guest, use that same email when you create an account.',
+  },
+  {
+    id: 'acc-2', topic: 'account', q: 'I cannot sign in.',
+    a: 'Use the email on the ticket. Request a fresh OTP or password reset from Sign In. YLT Care can help if the email itself is wrong — send the PNR and a reachable phone number.',
+  },
+  {
+    id: 'acc-3', topic: 'account', q: 'Who can see my booking?',
+    a: 'Only you (signed in) and YLT Care when you share the PNR. Partner ERP staff see trips they operate, not your password. Never send OTP codes to anyone claiming to be support.',
   },
 ];
 
-const CATEGORIES = ['All', 'Bus', 'Car', 'Account', 'ERP', 'Admin', 'Platform'];
+const CARE_MAIL = 'care@ylttravels.com';
+const CARE_PHONE = '+91 99999 99999';
+
+function matchesQuery(faq: Faq, q: string) {
+  if (!q) return true;
+  return `${faq.q} ${faq.a}`.toLowerCase().includes(q);
+}
 
 export default function HelpPage({ go }: { go: (v: View) => void }) {
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('All');
-  const [openId, setOpenId] = useState<string | null>('about');
+  const [topic, setTopic] = useState<TopicId>('book');
+  const [topicLocked, setTopicLocked] = useState(false);
+  const [openId, setOpenId] = useState<string | null>('book-1');
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return ARTICLES.filter((a) => {
-      const matchesCat = category === 'All' || a.category === category;
-      if (!matchesCat) return false;
-      if (!q) return true;
-      return (
-        a.title.toLowerCase().includes(q) ||
-        a.summary.toLowerCase().includes(q) ||
-        a.body.join(' ').toLowerCase().includes(q) ||
-        a.category.toLowerCase().includes(q)
-      );
-    });
-  }, [query, category]);
+  const q = query.trim().toLowerCase();
+  const hits = useMemo(() => FAQS.filter((f) => matchesQuery(f, q)), [q]);
+  const topicCounts = useMemo(() => {
+    const m: Record<string, number> = {};
+    hits.forEach((f) => { m[f.topic] = (m[f.topic] || 0) + 1; });
+    return m;
+  }, [hits]);
+
+  const searching = q.length > 0;
+  const activeTopic = searching && (!topicLocked || !topicCounts[topic]) ? (hits[0]?.topic || topic) : topic;
+  const visible = searching && !topicLocked ? hits : hits.filter((f) => f.topic === activeTopic);
+
+  function pickTopic(id: TopicId) {
+    setTopic(id);
+    setTopicLocked(true);
+    const first = FAQS.find((f) => f.topic === id && matchesQuery(f, q));
+    setOpenId(first?.id || null);
+  }
+
+  function onSearch(value: string) {
+    setQuery(value);
+    setTopicLocked(false);
+    const next = value.trim().toLowerCase();
+    const first = FAQS.find((f) => matchesQuery(f, next));
+    if (first) {
+      setTopic(first.topic);
+      setOpenId(first.id);
+    } else {
+      setOpenId(null);
+    }
+  }
 
   return (
-    <div>
-      {/* Hero */}
-      <section className="relative overflow-hidden border-b border-[var(--border)]">
-        <div className="absolute inset-0">
-          <div className="absolute -left-20 top-0 h-72 w-72 rounded-full bg-crimson-600/15 blur-3xl animate-float-slow" />
-          <div className="absolute -right-20 bottom-0 h-72 w-72 rounded-full bg-emerald-600/10 blur-3xl" />
-        </div>
-        <div className="container-fluid relative py-14 sm:py-20">
-          <div className="mx-auto max-w-3xl text-center animate-slide-up">
-            <span className="chip chip-crimson"><Sparkles className="h-3.5 w-3.5" /> Help Center</span>
-            <h1 className="mt-4 font-display text-4xl font-bold sm:text-5xl" style={{ color: 'var(--text-primary)' }}>How can we help?</h1>
-            <p className="mt-4 text-lg" style={{ color: 'var(--text-secondary)' }}>Search our knowledge base or browse by category to learn everything about YLT Transit.</p>
-            {/* Search bar */}
-            <div className="mt-8 relative">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
+    <div className="pb-16">
+      <section className="bg-crimson-600 text-white">
+        <div className="container-fluid grid gap-5 py-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:items-start lg:py-10">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-white/80">YLT Care</p>
+            <h1 className="mt-1 font-display text-3xl font-bold sm:text-4xl">Answers for your trip</h1>
+            <p className="mt-2 max-w-xl text-sm text-white/90">Search first. Open a topic only if you want to browse. No sign-in required to read help.</p>
+            <label className="relative mt-5 block max-w-xl">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
+                className="w-full rounded-xl border-0 bg-white py-3 pl-10 pr-3 text-sm text-slate-900 shadow-lg outline-none ring-2 ring-transparent focus:ring-white/70"
+                placeholder="Try cancel, refund, PNR, hotel, seat…"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search for buses, cars, payments, ERP, admin..."
-                className="input-field !rounded-xl !py-4 !pl-12 !text-base"
+                onChange={(e) => onSearch(e.target.value)}
+                type="search"
+                autoComplete="off"
               />
+            </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold hover:bg-white/25" onClick={() => go({ name: 'bookings' })}>Find my booking</button>
+              <button type="button" className="rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold hover:bg-white/25" onClick={() => go({ name: 'routes' })}>Search buses</button>
+              <button type="button" className="rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold hover:bg-white/25" onClick={() => go({ name: 'hotels' })}>Search hotels</button>
             </div>
           </div>
+
+          <aside className="rounded-2xl bg-white p-4 text-slate-800 shadow-xl">
+            <div className="flex items-center gap-2">
+              <span className="grid h-10 w-10 place-items-center rounded-full bg-crimson-50 text-crimson-700">
+                <Headphones className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-crimson-700">24/7 YLT Care</p>
+                <p className="font-display text-lg font-bold">Talk to a person</p>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600">Include your PNR. We do not ask for OTP or passwords.</p>
+            <a href={`mailto:${CARE_MAIL}`} className="mt-3 flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-crimson-800 hover:bg-crimson-50">
+              <Mail className="h-4 w-4 shrink-0" /> {CARE_MAIL}
+            </a>
+            <a href="tel:+919999999999" className="mt-2 flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100">
+              <Phone className="h-4 w-4 shrink-0" /> {CARE_PHONE}
+            </a>
+          </aside>
         </div>
       </section>
 
-      {/* Category pills */}
-      <div className="container-fluid py-6">
-        <div className="flex flex-wrap justify-center gap-2">
-          {CATEGORIES.map((c) => (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                category === c
-                  ? 'bg-crimson-600 text-white'
-                  : 'border border-[var(--border)] bg-[var(--bg-raised)] hover:border-crimson-500/40 hover:text-crimson-600'
-              }`}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-      </div>
+      <div className="container-fluid mt-6 grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <nav className="-mx-1 flex gap-2 overflow-x-auto pb-1 lg:mx-0 lg:flex-col lg:overflow-visible" aria-label="Help topics">
+          {TOPICS.map((t) => {
+            const count = topicCounts[t.id] || 0;
+            const on = t.id === activeTopic;
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => pickTopic(t.id)}
+                disabled={searching && count === 0}
+                className={`flex shrink-0 items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left text-sm ${on ? 'bg-crimson-50 font-semibold text-crimson-800' : 'border border-[var(--border)] bg-[var(--bg-surface)] hover:bg-[var(--bg-raised)]'} ${searching && count === 0 ? 'opacity-40' : ''}`}
+              >
+                <span className="flex items-center gap-2">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span>
+                    <span className="block">{t.label}</span>
+                    <span className="hidden text-xs font-normal text-slate-500 lg:block">{t.hint}</span>
+                  </span>
+                </span>
+                <span className="text-xs tabular-nums text-slate-400">{searching ? count : FAQS.filter((f) => f.topic === t.id).length}</span>
+              </button>
+            );
+          })}
+        </nav>
 
-      {/* Articles */}
-      <div className="container-fluid pb-20">
-        {filtered.length === 0 ? (
-          <div className="py-20 text-center">
-            <p style={{ color: 'var(--text-muted)' }}>No articles found for "{query}". Try a different search.</p>
+        <div>
+          <div className="mb-3 flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+            <BookOpen className="h-4 w-4" />
+            {searching
+              ? `${hits.length} match${hits.length === 1 ? '' : 'es'} for “${query.trim()}”${topicLocked ? ` in ${TOPICS.find((t) => t.id === topic)?.label}` : ''}`
+              : `${TOPICS.find((t) => t.id === activeTopic)?.label} — tap a question`}
           </div>
-        ) : (
-          <div className="mx-auto max-w-3xl space-y-3">
-            {filtered.map((a) => {
-              const isOpen = openId === a.id;
+
+          {!visible.length && (
+            <div className="rounded-2xl border px-4 py-8 text-sm" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+              No answer matches that search. Email {CARE_MAIL} with your PNR, or pick another topic.
+            </div>
+          )}
+
+          <ul className="space-y-2">
+            {visible.map((faq) => {
+              const open = openId === faq.id;
               return (
-                <div
-                  key={a.id}
-                  className={`overflow-hidden rounded-xl border transition ${
-                    isOpen ? 'border-crimson-500/40 bg-crimson-500/5' : 'border-[var(--border)] bg-[var(--bg-surface)] hover:border-crimson-500/30'
-                  }`}
-                >
+                <li key={faq.id} className="rounded-2xl border bg-[var(--bg-surface)]" style={{ borderColor: 'var(--border)' }}>
                   <button
-                    onClick={() => setOpenId(isOpen ? null : a.id)}
-                    className="flex w-full items-center gap-4 p-5 text-left"
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                    onClick={() => setOpenId(open ? null : faq.id)}
+                    aria-expanded={open}
                   >
-                    <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl transition ${
-                      isOpen ? 'bg-crimson-600 text-white' : 'bg-crimson-600/10 text-crimson-600'
-                    }`}>
-                      <a.icon className="h-5 w-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-crimson-600">{a.category}</span>
-                      </div>
-                      <h3 className="mt-0.5 font-semibold" style={{ color: 'var(--text-primary)' }}>{a.title}</h3>
-                      <p className="mt-0.5 truncate text-sm" style={{ color: 'var(--text-secondary)' }}>{a.summary}</p>
-                    </div>
-                    <ChevronRight className={`h-5 w-5 shrink-0 transition ${isOpen ? 'rotate-90' : ''}`} style={{ color: 'var(--text-muted)' }} />
+                    <span className="font-semibold">{faq.q}</span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
                   </button>
-                  {isOpen && (
-                    <div className="animate-fade-up px-5 pb-5 pl-20">
-                      <div className="space-y-3">
-                        {a.body.map((p, i) => (
-                          <p key={i} className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{p}</p>
-                        ))}
-                      </div>
-                    </div>
+                  {open && (
+                    <p className="border-t px-4 py-3 text-sm leading-relaxed" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
+                      {faq.a}
+                    </p>
                   )}
-                </div>
+                </li>
               );
             })}
-          </div>
-        )}
-
-        {/* Quick links */}
-        <div className="mx-auto mt-12 max-w-3xl rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] p-6" style={{ boxShadow: 'var(--shadow)' }}>
-          <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Quick links</h3>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <QuickLink icon={Navigation} label="Book a bus" onClick={() => go({ name: 'routes' })} />
-            <QuickLink icon={Car} label="Rent a car" onClick={() => go({ name: 'cars' })} />
-          </div>
-          <div className="mt-4 flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <Mail className="h-3.5 w-3.5" />
-            Still need help? Contact <span className="text-crimson-600">support@ylttravels.com</span>
-          </div>
+          </ul>
         </div>
       </div>
     </div>
-  );
-}
-
-function QuickLink({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg-raised)] p-4 transition hover:border-crimson-500/40 hover:bg-crimson-500/5">
-      <div className="grid h-10 w-10 place-items-center rounded-lg bg-crimson-600/15 text-crimson-600"><Icon className="h-5 w-5" /></div>
-      <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{label}</span>
-      <ChevronRight className="ml-auto h-4 w-4" style={{ color: 'var(--text-muted)' }} />
-    </button>
   );
 }

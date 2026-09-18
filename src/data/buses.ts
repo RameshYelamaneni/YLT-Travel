@@ -1,15 +1,9 @@
-import type { Bus, Seat, RouteStop } from '../types';
+import type { Bus, Seat, RouteStop, CancellationPolicy } from '../types';
 
 const OPERATORS = [
   { name: 'YLT Express', type: 'Volvo A/C Sleeper (2+1)', ac: true, sleeper: true, volvo: true, base: 780 },
   { name: 'YLT Premium', type: 'Scania A/C Sleeper', ac: true, sleeper: true, volvo: true, base: 1100 },
-  { name: 'VRL Travels', type: 'Mercedes Multi-Axle AC Sleeper', ac: true, sleeper: true, volvo: false, base: 950 },
-  { name: 'Orange Tours', type: 'A/C Seater (2+2)', ac: true, sleeper: false, volvo: false, base: 520 },
-  { name: 'Kallada Travels', type: 'Non-A/C Sleeper', ac: false, sleeper: true, volvo: false, base: 460 },
-  { name: 'KSRTC (Karnataka)', type: 'Volvo 9600S Multi Axle AC Sleeper', ac: true, sleeper: true, volvo: true, base: 1640 },
-  { name: 'APSRTC', type: 'A/C Seater-Sleeper', ac: true, sleeper: true, volvo: false, base: 890 },
-  { name: 'SRS Travels', type: 'Volvo A/C Seater (2+2)', ac: true, sleeper: false, volvo: true, base: 720 },
-  { name: 'Morning Star', type: 'Bharat Benz A/C Sleeper', ac: true, sleeper: true, volvo: false, base: 840 },
+  { name: 'YLT Coach', type: 'A/C Seater (2+2)', ac: true, sleeper: false, volvo: false, base: 520 },
 ];
 
 const AMENITIES = [
@@ -124,7 +118,7 @@ export function generateBuses(from: string, to: string, date: string): Bus[] {
       window_seats: Math.max(1, Math.floor(seats_available * 0.4)),
       boarding_points: stopsFor(from, departure_time, rand, true),
       dropping_points: stopsFor(to, arrival_time, rand, false),
-      cancellation: rand() > 0.5 ? 'free-until-6h' : rand() > 0.4 ? 'partial' : 'non-refundable',
+      cancellation: (['free-until-6h', 'partial', 'non-refundable'] as CancellationPolicy[])[Math.floor(rand() * 3)],
       rest_stop_rating: 3.5 + rand() * 1.5,
       delay_mins: rand() > 0.78 ? Math.floor(8 + rand() * 35) : 0,
       co2_kg: Math.round(12 + rand() * 18),
@@ -137,6 +131,7 @@ export function generateBuses(from: string, to: string, date: string): Bus[] {
       prime: rand() > 0.7,
       insurance_available: true,
       smart_score: 0,
+      listing_source: 'catalog' as const,
     };
   }).map((b) => ({
     ...b,
@@ -155,7 +150,7 @@ export function generateSeats(bus: Bus): Seat[] {
       label: bus.is_sleeper ? `L${i}` : `${i}`,
       type: bus.is_sleeper ? 'sleeper-lower' : 'seater',
       price: bus.price + (i <= 10 ? 50 : 0),
-      is_booked: rand() > 0.55,
+      is_booked: false,
       deck: 'lower',
       is_ladies: i <= 4,
       is_window: i % 4 === 1 || i % 4 === 0,
@@ -169,7 +164,7 @@ export function generateSeats(bus: Bus): Seat[] {
         label: `U${i}`,
         type: 'sleeper-upper',
         price: bus.price,
-        is_booked: rand() > 0.6,
+        is_booked: false,
         deck: 'upper',
         is_ladies: i <= 2,
         is_window: i % 2 === 0,

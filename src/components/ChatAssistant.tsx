@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { MessageCircle, X, Send, Bot, User, Loader2, Sparkles } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { apiFetch } from '../lib/api';
 
-interface Msg { role: 'user' | 'ai'; content: string }
+interface Msg { id?: string; role: 'user' | 'ai'; content: string }
 
 const SUGGESTIONS = [
   'Show my bookings',
@@ -21,9 +22,32 @@ export default function ChatAssistant() {
     { role: 'ai', content: "Hi! I'm the YLT assistant. Ask about your bookings, buses, cars, payments, or the operator ERP." },
   ]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const thread = (email.trim() || user?.email || 'guest').toLowerCase();
 
   useEffect(() => { if (user?.email) setEmail(user.email); }, [user]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, busy, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let stop = false;
+    async function pull() {
+      try {
+        const res = await apiFetch(`/api/chat.php?thread=${encodeURIComponent(thread)}&email=${encodeURIComponent(thread)}`);
+        const data = await res.json();
+        const rows: any[] = data.messages ?? [];
+        if (!stop && rows.length) {
+          setMessages(rows.map((r) => ({
+            id: r.id,
+            role: r.role === 'user' ? 'user' : 'ai',
+            content: r.content,
+          })));
+        }
+      } catch { /* keep local */ }
+    }
+    pull();
+    const t = window.setInterval(pull, 4000);
+    return () => { stop = true; window.clearInterval(t); };
+  }, [open, thread]);
 
   async function send(text: string) {
     const prompt = text.trim();
@@ -32,17 +56,12 @@ export default function ChatAssistant() {
     setInput('');
     setBusy(true);
     try {
-      const fnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-assistant`;
-      const res = await fetch(fnUrl, {
+      const res = await apiFetch('/api/chat.php', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ prompt, email: email.trim() }),
+        body: JSON.stringify({ prompt, email: thread, thread, channel: 'web' }),
       });
       const data = await res.json();
-      setMessages((m) => [...m, { role: 'ai', content: data.reply ?? 'Sorry, I did not get a response.' }]);
+      setMessages((m) => [...m, { role: 'ai', content: data.reply ?? data.error ?? 'Sorry, I did not get a response.' }]);
     } catch {
       setMessages((m) => [...m, { role: 'ai', content: 'Network error. Please try again.' }]);
     } finally {
@@ -55,40 +74,31 @@ export default function ChatAssistant() {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label="Chat with YLT assistant"
-        className="fixed bottom-5 right-5 z-50 grid h-12 w-12 place-items-center rounded-full bg-crimson-600 text-white shadow-lg transition hover:scale-105 hover:bg-crimson-500 active:scale-95"
+        className="fixed bottom-5 right-5 z-50 grid h-12 w-12 place-items-center rounded-full bg-navy-900 text-gold-400 shadow-lg transition hover:scale-105 hover:bg-navy-800 active:scale-95 sm:h-14 sm:w-14"
       >
         {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
         {!open && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-emerald-400 ring-2 ring-[var(--bg-page)]" />}
       </button>
 
       {open && (
-        <div className="fixed bottom-20 right-5 z-50 flex h-[min(70vh,560px)] w-[min(92vw,380px)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl animate-fade-up">
-          {/* Header */}
+        <div className="fixed bottom-20 right-3 z-50 flex h-[min(75vh,560px)] w-[min(96vw,380px)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-surface)] shadow-2xl animate-fade-up sm:right-5">
           <div className="flex items-center gap-3 border-b border-[var(--border)] bg-crimson-600 px-4 py-3 text-white">
             <div className="grid h-9 w-9 place-items-center rounded-full bg-white/15"><Bot className="h-5 w-5" /></div>
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-3.5 w-3.5" /> YLT Assistant</p>
-              <p className="text-[11px] text-white/70">AI-powered · bookings & help</p>
+              <p className="text-[11px] text-white/70">Live · MySQL · updates every 4s</p>
             </div>
             <button onClick={() => setOpen(false)} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-lg text-white/80 transition hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button>
           </div>
 
-          {/* Email row */}
           <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
-            <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Email</span>
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@email.com"
-              className="flex-1 bg-transparent text-xs outline-none"
-              style={{ color: 'var(--text-primary)' }}
-            />
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>Signed in as</span>
+            <span className="flex-1 truncate text-xs" style={{ color: 'var(--text-primary)' }}>{user?.email || 'Guest — sign in to see your tickets'}</span>
           </div>
 
-          {/* Messages */}
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-4 scrollbar-thin">
             {messages.map((m, i) => (
-              <div key={i} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div key={m.id ?? i} className={`flex gap-2 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
                 <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${m.role === 'user' ? 'bg-crimson-600/15 text-crimson-600' : 'bg-emerald-500/15 text-emerald-600'}`}>
                   {m.role === 'user' ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
                 </div>
@@ -105,7 +115,6 @@ export default function ChatAssistant() {
             )}
           </div>
 
-          {/* Suggestions */}
           {messages.length <= 1 && (
             <div className="flex flex-wrap gap-1.5 px-3 pb-2">
               {SUGGESTIONS.map((s) => (
@@ -114,7 +123,6 @@ export default function ChatAssistant() {
             </div>
           )}
 
-          {/* Input */}
           <form
             onSubmit={(e) => { e.preventDefault(); send(input); }}
             className="flex items-center gap-2 border-t border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3"

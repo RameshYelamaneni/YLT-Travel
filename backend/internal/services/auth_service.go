@@ -6,6 +6,9 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -21,14 +24,21 @@ import (
 // --- Auth service ---
 
 type AuthService struct {
-	repo   *repositories.AuthRepo
-	tmpl   *repositories.EmailTemplateRepo
-	jwt    *auth.Manager
+	repo     *repositories.AuthRepo
+	tmpl     *repositories.EmailTemplateRepo
+	jwt      *auth.Manager
 	settings *repositories.SettingsRepo
+	otpDev   bool
+	envSMTP  email.SMTPConfig
 }
 
-func NewAuthService(repo *repositories.AuthRepo, tmpl *repositories.EmailTemplateRepo, jwt *auth.Manager, settings *repositories.SettingsRepo) *AuthService {
-	return &AuthService{repo: repo, tmpl: tmpl, jwt: jwt, settings: settings}
+func NewAuthService(repo *repositories.AuthRepo, tmpl *repositories.EmailTemplateRepo, jwt *auth.Manager, settings *repositories.SettingsRepo, otpDev bool, envSMTP email.SMTPConfig) *AuthService {
+	return &AuthService{repo: repo, tmpl: tmpl, jwt: jwt, settings: settings, otpDev: otpDev, envSMTP: envSMTP}
+}
+
+// OTPSendResult is returned after generating and (when possible) emailing an OTP.
+type OTPSendResult struct {
+	DevHint string `json:"hint,omitempty"`
 }
 
 // SignupResult is returned by Signup and Signin.
@@ -131,55 +141,93 @@ func (s *AuthService) AdminSignin(ctx context.Context, username, password, coreA
 	return &SignupResult{AccessToken: token, Email: emailAddr, Name: emp.Name, UserID: emp.ID}, nil
 }
 
-// SendOTP generates a 6-digit code, stores it, and emails it.
-func (s *AuthService) SendOTP(ctx context.Context, emailAddr string) error {
+// SendOTP generates a cryptographically random 6-digit code, stores a hash,
+// and emails the plaintext via SMTP. There is no fixed production OTP.
+func (s *AuthService) SendOTP(ctx context.Context, emailAddr string) (*OTPSendResult, error) {
 	emailAddr = strings.ToLower(strings.TrimSpace(emailAddr))
 	if !validEmail(emailAddr) {
-		return errors.New("invalid email address")
+		return nil, errors.New("invalid email address")
 	}
 	count, err := s.repo.CountRecentOTPs(ctx, emailAddr)
 	if err != nil {
-		return fmt.Errorf("otp: rate limit check: %w", err)
+		return nil, fmt.Errorf("otp: rate limit check: %w", err)
 	}
 	if count >= 3 {
-		return errors.New("too many OTP requests, please wait a few minutes")
+		return nil, errors.New("too many OTP requests, please wait a few minutes")
 	}
+
+	smtpCfg, smtpReady := s.smtpFromSettings(ctx)
+	if !smtpReady && !s.otpDev {
+		return nil, errors.New("Email OTP is not configured. Add SMTP in Admin → Email.")
+	}
+
 	code := genOTP()
-	if err := s.repo.InsertOTP(ctx, emailAddr, code); err != nil {
-		return fmt.Errorf("otp: insert: %w", err)
+	if err := s.repo.InsertOTP(ctx, emailAddr, hashOTP(emailAddr, code)); err != nil {
+		return nil, fmt.Errorf("otp: insert: %w", err)
 	}
-	// Fetch SMTP config from app_settings.
-	settings, err := s.settings.Get(ctx)
-	if err != nil {
-		return fmt.Errorf("otp: settings: %w", err)
+
+	if smtpReady {
+		tmpl, _ := s.tmpl.GetByKey(ctx, "otp_login")
+		var subject, body string
+		if tmpl != nil {
+			subject, body = email.RenderTemplate(tmpl.Subject, tmpl.BodyHTML, map[string]string{"code": code, "email": emailAddr})
+		} else {
+			subject = "Your YLT Travels login code"
+			body = fmt.Sprintf(`<div style="font-family:sans-serif;max-width:420px"><p>Your YLT Travels login code is</p><div style="font-size:32px;font-weight:800;letter-spacing:8px;color:#0b1f3a">%s</div><p style="color:#666;font-size:13px">Expires in 10 minutes. If you did not request this, ignore this email.</p></div>`, code)
+		}
+		if err := email.Send(smtpCfg, emailAddr, subject, body); err != nil && !s.otpDev {
+			return nil, fmt.Errorf("could not send OTP email: %w", err)
+		}
 	}
-	if !settings.EmailEnabled {
-		return errors.New("email login is not configured")
+
+	out := &OTPSendResult{}
+	if s.otpDev {
+		out.DevHint = code
 	}
-	smtpCfg := email.SMTPConfig{
-		Host:     settings.SMTPHost.String,
-		Port:     settings.SMTPPort,
-		User:     settings.SMTPUser.String,
-		Password: settings.SMTPPassword.String,
-		From:     settings.SMTPFromEmail.String,
-		FromName: settings.SMTPFromName.String,
-		Secure:   settings.SMTPSecure,
+	return out, nil
+}
+
+func (s *AuthService) smtpFromSettings(ctx context.Context) (email.SMTPConfig, bool) {
+	if s.settings != nil {
+		settings, err := s.settings.Get(ctx)
+		if err == nil && settings != nil && settings.EmailEnabled {
+			cfg := email.SMTPConfig{
+				Host:     settings.SMTPHost.String,
+				Port:     settings.SMTPPort,
+				User:     settings.SMTPUser.String,
+				Password: settings.SMTPPassword.String,
+				From:     settings.SMTPFromEmail.String,
+				FromName: settings.SMTPFromName.String,
+				Secure:   settings.SMTPSecure,
+			}
+			if cfg.Host != "" && cfg.User != "" && cfg.Password != "" {
+				return cfg, true
+			}
+		}
 	}
-	// Try to render the DB template; fall back to inline HTML.
-	tmpl, _ := s.tmpl.GetByKey(ctx, "otp_login")
-	var subject, body string
-	if tmpl != nil {
-		subject, body = email.RenderTemplate(tmpl.Subject, tmpl.BodyHTML, map[string]string{"code": code, "email": emailAddr})
-	} else {
-		subject = "Your YLT Travels Login Code"
-		body = fmt.Sprintf(`<div style="font-size:36px;font-weight:800;letter-spacing:12px;color:#c81e44">%s</div>`, code)
+	cfg := s.envSMTP
+	if cfg.Host == "" {
+		cfg.Host = "smtp.hostinger.com"
 	}
-	return email.Send(smtpCfg, emailAddr, subject, body)
+	if cfg.Port == 0 {
+		cfg.Port = 465
+	}
+	if cfg.From == "" {
+		cfg.From = cfg.User
+	}
+	if cfg.FromName == "" {
+		cfg.FromName = "YLT Travels"
+	}
+	if cfg.User != "" && cfg.Password != "" {
+		return cfg, true
+	}
+	return email.SMTPConfig{}, false
 }
 
 // VerifyOTP validates the code and issues a JWT. Creates the user if new.
 func (s *AuthService) VerifyOTP(ctx context.Context, emailAddr, code string) (*SignupResult, error) {
 	emailAddr = strings.ToLower(strings.TrimSpace(emailAddr))
+	code = strings.TrimSpace(code)
 	if len(code) != 6 {
 		return nil, errors.New("email and 6-digit code are required")
 	}
@@ -196,12 +244,11 @@ func (s *AuthService) VerifyOTP(ctx context.Context, emailAddr, code string) (*S
 	if otp.ExpiresAt.Before(time.Now()) {
 		return nil, errors.New("this code has expired")
 	}
-	if otp.Code != code {
+	want := hashOTP(emailAddr, code)
+	if subtle.ConstantTimeCompare([]byte(otp.Code), []byte(want)) != 1 {
 		return nil, errors.New("incorrect code")
 	}
-	if err := s.repo.MarkOTPUsed(ctx, otp.ID); err != nil {
-		return nil, fmt.Errorf("verify otp: mark used: %w", err)
-	}
+	_ = s.repo.MarkOTPUsed(ctx, otp.ID)
 	// Find or create user.
 	user, err := s.repo.GetUserByEmail(ctx, emailAddr)
 	if err != nil {
@@ -238,8 +285,13 @@ func (s *AuthService) ForgotPasswordSend(ctx context.Context, emailAddr string) 
 		return errors.New("too many reset requests")
 	}
 	code := genOTP()
-	_ = s.repo.InsertOTP(ctx, emailAddr, code)
-	// Email sending omitted for brevity — same pattern as SendOTP.
+	_ = s.repo.InsertOTP(ctx, emailAddr, hashOTP(emailAddr, code))
+	smtpCfg, smtpReady := s.smtpFromSettings(ctx)
+	if smtpReady {
+		subject := "Your YLT Travels password reset code"
+		body := fmt.Sprintf(`<div style="font-family:sans-serif"><p>Reset code:</p><div style="font-size:32px;font-weight:800;letter-spacing:8px;color:#0b1f3a">%s</div></div>`, code)
+		_ = email.Send(smtpCfg, emailAddr, subject, body)
+	}
 	return nil
 }
 
@@ -255,7 +307,8 @@ func (s *AuthService) ForgotPasswordReset(ctx context.Context, emailAddr, code, 
 	if err != nil || otp == nil {
 		return errors.New("no reset code was requested")
 	}
-	if otp.Used || otp.ExpiresAt.Before(time.Now()) || otp.Code != code {
+	want := hashOTP(emailAddr, code)
+	if otp.Used || otp.ExpiresAt.Before(time.Now()) || subtle.ConstantTimeCompare([]byte(otp.Code), []byte(want)) != 1 {
 		return errors.New("invalid or expired code")
 	}
 	_ = s.repo.MarkOTPUsed(ctx, otp.ID)
@@ -357,4 +410,9 @@ func validRole(r string) bool {
 func genOTP() string {
 	n, _ := rand.Int(rand.Reader, big.NewInt(1000000))
 	return fmt.Sprintf("%06d", n.Int64())
+}
+
+func hashOTP(emailAddr, code string) string {
+	sum := sha256.Sum256([]byte("ylt-otp|" + emailAddr + "|" + code))
+	return hex.EncodeToString(sum[:])
 }

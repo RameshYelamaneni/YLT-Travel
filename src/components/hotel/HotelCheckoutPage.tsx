@@ -1,34 +1,52 @@
-import { useState } from 'react';
-import { ArrowLeft, CreditCard, Smartphone, Landmark, BedDouble, Users, Star, Shield, Loader2 } from 'lucide-react';
-import { useHotelStore, calcBookingPricing, nightsBetween } from '../../store/hotelStore';
+import { useState, useEffect } from 'react';
+import { ArrowLeft, BedDouble, Users, Star, Shield, Loader2, Lock } from 'lucide-react';
+import { useHotelStore, calcBookingPricing, nightsBetween, defaultStayDates } from '../../store/hotelStore';
 import { formatINR } from '../../lib/format';
+import { payWithRazorpay } from '../../lib/razorpay';
+import { recordBooking } from '../MyBookingsPage';
+import { apiFetch } from '../../lib/api';
 
 export default function HotelCheckoutPage({ hotelId, roomId, go }: { hotelId: string; roomId: string; go: (v: any) => void }) {
   const store = useHotelStore();
   const hotel = store.getHotel(hotelId);
   const room = hotel?.rooms.find(r => r.id === roomId);
+  const stay = defaultStayDates(store.filters.checkIn, store.filters.checkOut);
+  const [loadingHotel, setLoadingHotel] = useState(!hotel);
+
+  useEffect(() => {
+    if (hotel) { setLoadingHotel(false); return; }
+    let live = true;
+    setLoadingHotel(true);
+    void store.loadHotel(hotelId).finally(() => { if (live) setLoadingHotel(false); });
+    return () => { live = false; };
+  }, [hotel, hotelId, store]);
 
   const [form, setForm] = useState({
     guest_name: '', guest_email: '', guest_phone: '',
-    check_in: store.filters.checkIn || '', check_out: store.filters.checkOut || '',
-    guests: store.filters.guests || 2, special_requests: '', payment_method: 'upi',
-    card_number: '', card_expiry: '', card_cvv: '',
+    check_in: stay.checkIn, check_out: stay.checkOut,
+    guests: store.filters.guests || 2, special_requests: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+
+  if (loadingHotel && !hotel) return (
+    <div className="grid min-h-[60vh] place-items-center" style={{ backgroundColor: 'var(--bg-page)' }}>
+      <p className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>Loading hotel…</p>
+    </div>
+  );
 
   if (!hotel || !room) return (
     <div className="grid min-h-[60vh] place-items-center" style={{ backgroundColor: 'var(--bg-page)' }}>
       <div className="text-center">
         <p className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Room not found</p>
-        <button onClick={() => go({ name: 'hotels' })} className="mt-3 rounded-lg bg-crimson-600 px-4 py-2 text-sm text-white">Back to Search</button>
+        <button onClick={() => go({ name: 'hotels' })} className="mt-3 rounded-lg bg-gold-500 px-4 py-2 text-sm font-bold text-navy-950">Back to Search</button>
       </div>
     </div>
   );
 
   const h = hotel;
   const r = room;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = stay.checkIn;
   const nights = form.check_in && form.check_out ? nightsBetween(form.check_in, form.check_out) : 1;
   const pricing = calcBookingPricing(r.price_per_night, nights);
 
@@ -44,27 +62,53 @@ export default function HotelCheckoutPage({ hotelId, roomId, go }: { hotelId: st
     if (form.check_in && form.check_out && form.check_out <= form.check_in) e.check_out = 'Must be after check-in';
     if (form.guests < 1) e.guests = 'Min 1';
     if (form.guests > r.max_guests) e.guests = `Max ${r.max_guests} guests`;
-    if (form.payment_method === 'card') {
-      if (form.card_number.replace(/\s/g, '').length < 16) e.card_number = 'Enter 16 digits';
-      if (!form.card_expiry) e.card_expiry = 'Required';
-      if (form.card_cvv.length < 3) e.card_cvv = 'Required';
-    }
     setErrors(e);
     return Object.keys(e).length === 0;
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!validate()) return;
     setSubmitting(true);
-    setTimeout(() => {
+    try {
+      const paid = await payWithRazorpay({
+        amount: pricing.total,
+        name: form.guest_name,
+        description: `${h.name} · ${r.room_type}`,
+        email: form.guest_email,
+      });
+      if (!paid.ok) {
+        setSubmitting(false);
+        setErrors({ payment: paid.message });
+        return;
+      }
       const booking = store.createBooking({
         hotel: h, room: r, guest_name: form.guest_name, guest_email: form.guest_email,
         guest_phone: form.guest_phone, check_in: form.check_in, check_out: form.check_out,
-        guests: form.guests, special_requests: form.special_requests, payment_method: form.payment_method,
+        guests: form.guests, special_requests: form.special_requests, payment_method: 'razorpay',
       });
-      setSubmitting(false);
+      recordBooking({
+        pnr: booking.pnr, type: 'hotel', operator: h.name, route: h.city,
+        date: form.check_in, departure: 'Check-in', seats: r.room_type, total: pricing.total, created_at: new Date().toISOString(),
+      });
+      try {
+        await apiFetch('/api/bookings', {
+          method: 'POST',
+          body: JSON.stringify({
+            type: 'hotel', pnr: booking.pnr, hotel_id: h.id, hotel_name: h.name, city: h.city,
+            guest_name: form.guest_name, guest_email: form.guest_email, guest_phone: form.guest_phone,
+            check_in: form.check_in, check_out: form.check_out, guests: form.guests, rooms: 1,
+            room_type: r.room_type, total_amount: pricing.total, user_identifier: form.guest_email,
+            razorpay_payment_id: paid.paymentId,
+            razorpay_order_id: paid.orderId || '',
+            razorpay_signature: paid.signature || '',
+          }),
+        });
+      } catch { /* still show confirmation */ }
       go({ name: 'hotelConfirmation', booking });
-    }, 1200);
+    } catch {
+      setErrors({ payment: 'Payment could not start.' });
+    }
+    setSubmitting(false);
   }
 
   const Field = ({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) => (
@@ -75,14 +119,14 @@ export default function HotelCheckoutPage({ hotelId, roomId, go }: { hotelId: st
     </div>
   );
 
-  const inputCls = (err?: string) => `w-full rounded-lg border px-3 py-2.5 text-sm transition focus:outline-none focus:ring-1 focus:ring-crimson-500 ${err ? 'border-red-500' : ''}`;
+  const inputCls = (err?: string) => `w-full rounded-lg border px-3 py-2.5 text-sm transition focus:outline-none focus:ring-1 focus:ring-gold-500 ${err ? 'border-red-500' : ''}`;
   const inputSty = { backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border)', color: 'var(--text-primary)' };
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--bg-page)' }}>
       <div className="mx-auto max-w-5xl px-4 py-8">
         <button onClick={() => go({ name: 'hotelDetails', hotelId })}
-          className="mb-6 flex items-center gap-2 text-sm font-medium transition hover:text-crimson-500" style={{ color: 'var(--text-secondary)' }}>
+          className="mb-6 flex items-center gap-2 text-sm font-medium transition hover:text-navy-700" style={{ color: 'var(--text-secondary)' }}>
           <ArrowLeft className="h-4 w-4" /> Back to Hotel
         </button>
 
@@ -104,10 +148,10 @@ export default function HotelCheckoutPage({ hotelId, roomId, go }: { hotelId: st
                   <input type="number" min={1} max={r.max_guests} value={form.guests} onChange={e => upd('guests', +e.target.value)} className={inputCls(errors.guests)} style={inputSty} />
                 </Field>
                 <Field label="Check-in" error={errors.check_in}>
-                  <input type="date" min={today} value={form.check_in} onChange={e => upd('check_in', e.target.value)} className={inputCls(errors.check_in)} style={inputSty} />
+                  <input type="date" min={today} value={form.check_in} required onChange={e => upd('check_in', e.target.value)} className={inputCls(errors.check_in)} style={inputSty} />
                 </Field>
                 <Field label="Check-out" error={errors.check_out}>
-                  <input type="date" min={form.check_in || today} value={form.check_out} onChange={e => upd('check_out', e.target.value)} className={inputCls(errors.check_out)} style={inputSty} />
+                  <input type="date" min={form.check_in || today} value={form.check_out} required onChange={e => upd('check_out', e.target.value)} className={inputCls(errors.check_out)} style={inputSty} />
                 </Field>
               </div>
               <div className="mt-4">
@@ -119,36 +163,20 @@ export default function HotelCheckoutPage({ hotelId, roomId, go }: { hotelId: st
             </div>
 
             <div className="rounded-xl border p-5" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-card)' }}>
-              <h2 className="mb-4 font-display text-base font-bold" style={{ color: 'var(--text-primary)' }}>Payment Method</h2>
-              <div className="grid gap-3 sm:grid-cols-3">
-                {([['upi', 'UPI', Smartphone], ['card', 'Credit Card', CreditCard], ['netbanking', 'Net Banking', Landmark]] as const).map(([val, label, Icon]) => (
-                  <button key={val} onClick={() => upd('payment_method', val)}
-                    className={`flex items-center gap-3 rounded-lg border p-3 text-left text-sm font-medium transition ${form.payment_method === val ? 'border-crimson-500 bg-crimson-500/5' : 'hover:bg-[var(--bg-raised)]'}`}
-                    style={{ borderColor: form.payment_method === val ? undefined : 'var(--border)', color: 'var(--text-primary)' }}>
-                    <Icon className={`h-5 w-5 ${form.payment_method === val ? 'text-crimson-500' : ''}`} style={form.payment_method === val ? undefined : { color: 'var(--text-muted)' }} />
-                    {label}
-                  </button>
-                ))}
+              <h2 className="mb-2 font-display text-base font-bold" style={{ color: 'var(--text-primary)' }}>Payment</h2>
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                Pay securely with Razorpay. UPI, cards, and net banking open in the Razorpay checkout — not as fake tiles on this page.
+              </p>
+              <div className="mt-4 flex items-center gap-2 rounded-lg bg-navy-50 px-3 py-2 text-sm text-navy-800">
+                <Lock className="h-4 w-4" /> Razorpay · PCI checkout
               </div>
-              {form.payment_method === 'card' && (
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  <Field label="Card Number" error={errors.card_number}>
-                    <input value={form.card_number} onChange={e => upd('card_number', e.target.value)} maxLength={19} className={inputCls(errors.card_number)} style={inputSty} placeholder="4242 4242 4242 4242" />
-                  </Field>
-                  <Field label="Expiry" error={errors.card_expiry}>
-                    <input value={form.card_expiry} onChange={e => upd('card_expiry', e.target.value)} maxLength={5} className={inputCls(errors.card_expiry)} style={inputSty} placeholder="MM/YY" />
-                  </Field>
-                  <Field label="CVV" error={errors.card_cvv}>
-                    <input type="password" value={form.card_cvv} onChange={e => upd('card_cvv', e.target.value)} maxLength={4} className={inputCls(errors.card_cvv)} style={inputSty} placeholder="***" />
-                  </Field>
-                </div>
-              )}
             </div>
 
             <button onClick={handleSubmit} disabled={submitting}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-crimson-600 py-3.5 text-sm font-bold text-white shadow-lg transition hover:bg-crimson-700 disabled:opacity-60">
-              {submitting ? <><Loader2 className="h-4 w-4 animate-spin" />Processing...</> : `Confirm & Pay ${formatINR(pricing.total)}`}
+              className="btn-search flex w-full py-3.5 text-base">
+              {submitting ? <><Loader2 className="h-4 w-4 animate-spin" />Opening Razorpay…</> : `Pay securely ${formatINR(pricing.total)}`}
             </button>
+            {errors.payment && <p className="mt-2 text-center text-sm text-red-400">{errors.payment}</p>}
           </div>
 
           <div className="lg:col-span-2">
@@ -176,7 +204,7 @@ export default function HotelCheckoutPage({ hotelId, roomId, go }: { hotelId: st
                   <div className="flex justify-between text-xs"><span style={{ color: 'var(--text-muted)' }}>GST ({Math.round(pricing.gst_rate * 100)}%)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(pricing.gst)}</span></div>
                   <div className="flex justify-between border-t pt-3" style={{ borderColor: 'var(--border)' }}>
                     <span className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>Total</span>
-                    <span className="text-lg font-bold text-crimson-500">{formatINR(pricing.total)}</span>
+                    <span className="text-lg font-bold text-navy-800">{formatINR(pricing.total)}</span>
                   </div>
                 </div>
               </div>

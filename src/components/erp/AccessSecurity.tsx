@@ -1,12 +1,44 @@
 import { useState } from 'react';
 import { Shield, Key, History, Monitor, Plus, Trash2, Eye, EyeOff, Copy, Lock } from 'lucide-react';
-import { useErpStore, type ErpRole } from '../../store/erpStore';
+import { useErpStore } from '../../store/erpStore';
 import { Card, StatCard, Badge, Modal, Field, ModuleHeader, EmptyStateCard, inputCls } from './ui';
 import { RippleButton } from '../operator/RippleButton';
 import { ErpLoader } from '../operator/ErpLoader';
 
+function asRows<T>(v: unknown): T[] {
+  if (Array.isArray(v)) return v as T[];
+  if (v && typeof v === 'object') {
+    const o = v as { rows?: unknown; data?: unknown; items?: unknown };
+    if (Array.isArray(o.rows)) return o.rows as T[];
+    if (Array.isArray(o.data)) return o.data as T[];
+    if (Array.isArray(o.items)) return o.items as T[];
+  }
+  return [];
+}
+
+function asPerms(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (!t) return [];
+    try {
+      const parsed = JSON.parse(t);
+      if (Array.isArray(parsed)) return asPerms(parsed);
+    } catch { /* comma list */ }
+    return t.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 export default function AccessSecurity() {
-  const { roles, auditLogs, apiKeys, insert, remove, update, logAction, loading } = useErpStore();
+  const store = useErpStore();
+  const roles = asRows<any>(store.roles);
+  const auditLogs = asRows<any>(store.auditLogs);
+  const apiKeys = asRows<any>(store.apiKeys);
+  const insert = store.insert;
+  const remove = store.remove;
+  const logAction = store.logAction;
+  const loading = store.loading;
   const [tab, setTab] = useState<'roles' | 'audit' | 'sessions' | 'apikeys'>('roles');
   const [addingRole, setAddingRole] = useState(false);
   const [addingKey, setAddingKey] = useState(false);
@@ -14,8 +46,8 @@ export default function AccessSecurity() {
 
   if (loading && !roles.length) return <ErpLoader label="Loading security…" />;
 
-  const totalUsers = roles.reduce((s, r) => s + r.user_count, 0);
-  const activeKeys = apiKeys.filter((k) => k.status === 'active').length;
+  const totalUsers = roles.reduce((s, r) => s + Number(r?.user_count || 0), 0);
+  const activeKeys = apiKeys.filter((k) => String(k?.status || '') === 'active').length;
 
   return (
     <div className="space-y-5">
@@ -47,20 +79,20 @@ export default function AccessSecurity() {
           </div>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {roles.map((r) => (
-              <Card key={r.id}>
+              <Card key={r.id || r.role_name}>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2">
                     <Shield className="h-5 w-5 text-crimson-500" />
-                    <h3 className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>{r.role_name}</h3>
+                    <h3 className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>{r.role_name || 'Role'}</h3>
                   </div>
-                  <Badge tone="blue">{r.user_count} users</Badge>
+                  <Badge tone="blue">{Number(r.user_count || 0)} users</Badge>
                 </div>
                 <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>{r.description ?? 'No description'}</p>
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {(r.permissions as string[]).map((p) => <span key={p} className="rounded-md bg-crimson-500/10 px-2 py-0.5 text-[11px] font-medium text-crimson-600">{p}</span>)}
+                  {asPerms(r.permissions).map((p) => <span key={p} className="rounded-md bg-crimson-500/10 px-2 py-0.5 text-[11px] font-medium text-crimson-600">{p}</span>)}
                 </div>
                 <div className="mt-3 flex justify-end border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-                  <button onClick={() => { remove('erp_roles', r.id); logAction('delete_role', 'erp_roles', r.id); }} className="text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
+                  {r.id ? <button onClick={() => { void remove('erp_roles', r.id); void logAction('delete_role', 'erp_roles', r.id); }} className="text-red-500"><Trash2 className="h-3.5 w-3.5" /></button> : null}
                 </div>
               </Card>
             ))}
@@ -75,14 +107,14 @@ export default function AccessSecurity() {
           <h3 className="mb-4 font-display font-bold" style={{ color: 'var(--text-primary)' }}>Audit Logs</h3>
           {auditLogs.length ? (
             <div className="space-y-2">
-              {auditLogs.slice(0, 50).map((log) => (
-                <div key={log.id} className="flex items-center gap-3 rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
+              {auditLogs.slice(0, 50).map((log, i) => (
+                <div key={log.id || `log-${i}`} className="flex items-center gap-3 rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
                   <History className="h-4 w-4 text-crimson-500" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{log.action}</p>
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{log.entity_type ?? ''} · {log.user_name ?? 'System'} ({log.user_role ?? '—'}) · {new Date(log.created_at).toLocaleString()}</p>
+                    <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{log.action || 'event'}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{log.entity_type ?? ''} · {log.user_name ?? 'System'} ({log.user_role ?? '—'}) · {log.created_at ? new Date(log.created_at).toLocaleString() : '—'}</p>
                   </div>
-                  {log.entity_id && <Badge tone="gray">{log.entity_id.slice(0, 8)}</Badge>}
+                  {log.entity_id && <Badge tone="gray">{String(log.entity_id).slice(0, 8)}</Badge>}
                 </div>
               ))}
             </div>
@@ -116,20 +148,20 @@ export default function AccessSecurity() {
             <h3 className="mb-4 font-display font-bold" style={{ color: 'var(--text-primary)' }}>API Keys</h3>
             {apiKeys.length ? (
               <div className="space-y-2">
-                {apiKeys.map((k) => (
-                  <div key={k.id} className="flex items-center gap-3 rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
+                {apiKeys.map((k, i) => (
+                  <div key={k.id || `key-${i}`} className="flex items-center gap-3 rounded-lg border p-3" style={{ borderColor: 'var(--border)' }}>
                     <Key className="h-4 w-4 text-crimson-500" />
                     <div className="flex-1">
-                      <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{k.key_name}</p>
+                      <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{k.key_name || 'API key'}</p>
                       <p className="flex items-center gap-1.5 font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {showKey === k.id ? `${k.api_key_prefix}•••••••••••••••` : `${k.api_key_prefix}••••••••`}
+                        {showKey === k.id ? `${k.api_key_prefix || ''}•••••••••••••••` : `${k.api_key_prefix || 'ylt_'}••••••••`}
                         <button onClick={() => setShowKey(showKey === k.id ? null : k.id)} className="text-crimson-500">{showKey === k.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}</button>
-                        <button onClick={() => navigator.clipboard.writeText(k.api_key_prefix)} className="text-crimson-500"><Copy className="h-3 w-3" /></button>
+                        <button onClick={() => navigator.clipboard.writeText(String(k.api_key_prefix || ''))} className="text-crimson-500"><Copy className="h-3 w-3" /></button>
                       </p>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Created: {new Date(k.created_at).toLocaleDateString()}{k.expires_at ? ` · Expires: ${new Date(k.expires_at).toLocaleDateString()}` : ''}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Created: {k.created_at ? new Date(k.created_at).toLocaleDateString() : '—'}{k.expires_at ? ` · Expires: ${new Date(k.expires_at).toLocaleDateString()}` : ''}</p>
                     </div>
-                    <Badge tone={k.status === 'active' ? 'green' : 'gray'}>{k.status}</Badge>
-                    <button onClick={() => { remove('erp_api_keys', k.id); logAction('revoke_key', 'erp_api_keys', k.id); }} className="text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
+                    <Badge tone={k.status === 'active' ? 'green' : 'gray'}>{k.status || 'inactive'}</Badge>
+                    {k.id ? <button onClick={() => { void remove('erp_api_keys', k.id); void logAction('revoke_key', 'erp_api_keys', k.id); }} className="text-red-500"><Trash2 className="h-3.5 w-3.5" /></button> : null}
                   </div>
                 ))}
               </div>

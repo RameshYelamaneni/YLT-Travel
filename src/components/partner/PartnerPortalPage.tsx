@@ -1,26 +1,31 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   LayoutDashboard, Bus, Car, Users, Ticket, Wallet, Sparkles, Brain,
   Menu, X, Briefcase, AlertTriangle, Gauge, Home,
   Plus, Trash2, Download, TrendingUp, Fuel, Wrench, ShieldCheck, Hotel,
   LogOut, ArrowLeft, MapPin, Clock, Calendar, Phone, UserCircle, Route,
-  BedDouble, Star, ChevronRight, Activity, DollarSign, Percent,
-  Shield, Key, FileText, Package, Navigation, Receipt, BarChart3,
+  BedDouble, Star, ChevronRight, ChevronDown, Activity, DollarSign, Percent,
+  Shield, Receipt, BarChart3, ConciergeBell, BookUser, Contact, Settings2,
 } from 'lucide-react';
 import {
   usePartnerStore, partnerEarnings, dailyEarnings, slaCompliance, fmtINR,
   type BusAsset, type CarAsset, type Driver,
 } from '../../store/partnerStore';
 import { usePartnerHotelStore, hotelSlaCompliance, avgOccupancy } from '../../store/partnerHotelStore';
-import { useErpStore, fleetHealthScore, crewSlaAverage, totalEarnings, totalExpenses } from '../../store/erpStore';
+import { usePartnerCrmStore } from '../../store/partnerCrmStore';
+import { useErpStore, profitForecast } from '../../store/erpStore';
 import { useAuth } from '../../lib/auth';
 import { useNav } from '../../store/nav';
-import HotelERP from './HotelERP';
+import { apiFetch } from '../../lib/api';
+import HotelERP, { type HotelPmsView } from './HotelERP';
+import PartnerCrm from './PartnerCrm';
 import PartnerConsoleHeader from '../operator/PartnerConsoleHeader';
 import { RippleButton } from '../operator/RippleButton';
-import { ErpLoader } from '../operator/ErpLoader';
 import { StatCard, SectionCard, DataTable, Drawer, Sparkline, BarChart } from '../erp/ui';
 import BusOperationsSuite from '../erp/BusOperationsSuite';
+import BusGdsDesk from '../erp/BusGdsDesk';
+import BusOpsBoards from '../erp/BusOpsBoards';
+import BusConfiguration from '../erp/BusConfiguration';
 import CrewWorkforceHub from '../erp/CrewWorkforceHub';
 import SeatInventoryEngine from '../erp/SeatInventoryEngine';
 import TripSchedulePlanner from '../erp/TripSchedulePlanner';
@@ -30,25 +35,112 @@ import IntelligenceInsights from '../erp/IntelligenceInsights';
 import ExpenseLedgerManager from '../erp/ExpenseLedgerManager';
 import PartnerProfileBranding from '../erp/PartnerProfileBranding';
 import AccessSecurity from '../erp/AccessSecurity';
+import ErrorBoundary from '../ErrorBoundary';
 
-type Module = 'dashboard' | 'cars' | 'hotels' | 'ai'
-  | 'bus_ops' | 'crew' | 'seat_inv' | 'trip_plan' | 'earnings_center' | 'maint_desk' | 'intel' | 'expense_ledger' | 'partner_profile' | 'access_sec';
+type HotelModule = 'hotel_dashboard' | 'hotel_calendar' | 'hotel_desk' | 'hotel_rooms' | 'hotel_inventory' | 'hotel_reservations' | 'hotel_guests' | 'hotel_rates' | 'hotel_folio' | 'hotel_reports';
+type BusModule = 'bus_desk' | 'bus_config' | 'bus_fleet' | 'bus_health' | 'bus_trips' | 'bus_seats' | 'bus_crew' | 'bus_bookings' | 'bus_expenses' | 'bus_permits' | 'bus_customers' | 'bus_search' | 'bus_print' | 'bus_cities' | 'bus_types' | 'bus_cancel' | 'bus_analytics' | 'bus_campaigns' | 'bus_offers' | 'bus_deposits';
+type CrmModule = 'crm_customers' | 'crm_guestbook';
+type Module = 'dashboard' | 'cars' | 'ai' | 'jobs'
+  | 'bus_ops' | 'crew' | 'seat_inv' | 'trip_plan' | 'earnings_center' | 'maint_desk' | 'intel' | 'expense_ledger' | 'partner_profile' | 'access_sec'
+  | HotelModule | BusModule | CrmModule;
 
-const NAV: { heading: string; items: { id: Module; label: string; icon: React.ComponentType<{ className?: string }> }[] }[] = [
+const HOTEL_VIEW: Record<HotelModule, HotelPmsView> = {
+  hotel_dashboard: 'dashboard',
+  hotel_calendar: 'calendar',
+  hotel_desk: 'desk',
+  hotel_rooms: 'rooms',
+  hotel_inventory: 'inventory',
+  hotel_reservations: 'reservations',
+  hotel_guests: 'guests',
+  hotel_rates: 'rates',
+  hotel_folio: 'folio',
+  hotel_reports: 'reports',
+};
+
+const MODULE_KEY = 'ylt_partner_erp_module';
+const HOTEL_NAV_KEY = 'ylt_partner_erp_hotel_nav';
+const BUS_NAV_KEY = 'ylt_partner_erp_bus_nav';
+
+const LEGACY_MODULE: Record<string, Module> = {
+  bus_ops: 'bus_fleet',
+  crew: 'bus_crew',
+  seat_inv: 'bus_seats',
+  trip_plan: 'bus_trips',
+  jobs: 'dashboard',
+};
+
+function normalizeModule(v: string | null): Module {
+  if (!v) return 'dashboard';
+  return (LEGACY_MODULE[v] || v) as Module;
+}
+
+function readSavedModule(): Module {
+  try {
+    return normalizeModule(sessionStorage.getItem(MODULE_KEY));
+  } catch { /* ignore */ }
+  return 'dashboard';
+}
+
+type NavIcon = React.ComponentType<{ className?: string }>;
+type NavLeaf = { id: Module; label: string; icon: NavIcon };
+type BranchId = 'hotel_erp' | 'bus_erp';
+type NavBranch = { id: BranchId; label: string; icon: NavIcon; children: NavLeaf[] };
+type NavItem = NavLeaf | NavBranch;
+
+const HOTEL_CHILDREN: NavLeaf[] = [
+  { id: 'hotel_dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'hotel_calendar', label: 'Availability', icon: Calendar },
+  { id: 'hotel_desk', label: 'Front desk', icon: ConciergeBell },
+  { id: 'hotel_rooms', label: 'Rooms', icon: BedDouble },
+  { id: 'hotel_inventory', label: 'Inventory', icon: Hotel },
+  { id: 'hotel_reservations', label: 'Reservations', icon: Ticket },
+  { id: 'hotel_guests', label: 'Guests', icon: Users },
+  { id: 'hotel_rates', label: 'Rates', icon: Percent },
+  { id: 'hotel_folio', label: 'Folio', icon: Receipt },
+  { id: 'hotel_reports', label: 'Reports', icon: BarChart3 },
+];
+
+const BUS_CHILDREN: NavLeaf[] = [
+  { id: 'bus_desk', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'bus_config', label: 'Configuration', icon: Settings2 },
+  { id: 'bus_bookings', label: 'Bus booking', icon: Ticket },
+  { id: 'bus_search', label: 'Search', icon: MapPin },
+  { id: 'bus_print', label: 'Print', icon: Receipt },
+  { id: 'bus_cities', label: 'Operating cities', icon: MapPin },
+  { id: 'bus_types', label: 'Bus types', icon: Bus },
+  { id: 'bus_fleet', label: 'Buses', icon: Bus },
+  { id: 'bus_health', label: 'Health', icon: Activity },
+  { id: 'bus_trips', label: 'Bus schedule', icon: Route },
+  { id: 'bus_cancel', label: 'Cancellation policy', icon: Percent },
+  { id: 'bus_analytics', label: 'Analytics', icon: BarChart3 },
+  { id: 'bus_campaigns', label: 'Campaigns', icon: Sparkles },
+  { id: 'bus_offers', label: 'Offer price', icon: Percent },
+  { id: 'bus_deposits', label: 'Deposit history', icon: Wallet },
+  { id: 'bus_seats', label: 'Seat inventory', icon: Ticket },
+  { id: 'bus_crew', label: 'Crew', icon: Users },
+  { id: 'bus_expenses', label: 'Expenses', icon: Receipt },
+  { id: 'bus_permits', label: 'Permits', icon: ShieldCheck },
+  { id: 'bus_customers', label: 'Customers', icon: Contact },
+];
+
+const CRM_CHILDREN: NavLeaf[] = [
+  { id: 'crm_customers', label: 'Customers', icon: Contact },
+  { id: 'crm_guestbook', label: 'Guest book', icon: BookUser },
+];
+
+const NAV: { heading: string; items: NavItem[] }[] = [
   { heading: '', items: [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
   ] },
-  { heading: 'Operations', items: [
-    { id: 'seat_inv', label: 'Seat Inventory & Booking Engine', icon: Ticket },
-    { id: 'trip_plan', label: 'Trip & Schedule Planner', icon: Route },
+  { heading: 'Transport', items: [
+    { id: 'bus_erp', label: 'Bus', icon: Bus, children: BUS_CHILDREN },
+    { id: 'cars', label: 'Car Fleet', icon: Car },
   ] },
-  { heading: 'Assets', items: [
-    { id: 'bus_ops', label: 'Bus Operations OS', icon: Bus },
-    { id: 'cars', label: 'Car Fleet OS', icon: Car },
-    { id: 'hotels', label: 'Hotel ERP OS', icon: Hotel },
+  { heading: 'Property / Hotel', items: [
+    { id: 'hotel_erp', label: 'Hotel ERP', icon: Hotel, children: HOTEL_CHILDREN },
   ] },
+  { heading: 'CRM', items: CRM_CHILDREN },
   { heading: 'People & Finance', items: [
-    { id: 'crew', label: 'Crew & Workforce Hub', icon: Users },
     { id: 'earnings_center', label: 'Earnings & Payout Center', icon: Wallet },
     { id: 'expense_ledger', label: 'Expense & Ledger Manager', icon: Receipt },
   ] },
@@ -56,7 +148,7 @@ const NAV: { heading: string; items: { id: Module; label: string; icon: React.Co
     { id: 'maint_desk', label: 'Maintenance & Compliance Desk', icon: Wrench },
   ] },
   { heading: 'Intelligence', items: [
-    { id: 'intel', label: 'Intelligence & Insights', icon: Sparkles },
+    { id: 'intel', label: 'AI profits & margins', icon: Sparkles },
     { id: 'ai', label: 'AI Assistant', icon: Brain },
   ] },
   { heading: 'Account', items: [
@@ -65,121 +157,267 @@ const NAV: { heading: string; items: { id: Module; label: string; icon: React.Co
   ] },
 ];
 
+const BUS_MODS = new Set<Module>(['bus_desk', 'bus_config', 'bus_fleet', 'bus_health', 'bus_trips', 'bus_seats', 'bus_crew', 'bus_bookings', 'bus_expenses', 'bus_permits', 'bus_customers', 'bus_ops', 'crew', 'seat_inv', 'trip_plan', 'bus_search', 'bus_print', 'bus_cities', 'bus_types', 'bus_cancel', 'bus_analytics', 'bus_campaigns', 'bus_offers', 'bus_deposits']);
+const HOTEL_MODS = new Set<Module>(['hotel_dashboard', 'hotel_calendar', 'hotel_desk', 'hotel_rooms', 'hotel_inventory', 'hotel_reservations', 'hotel_guests', 'hotel_rates', 'hotel_folio', 'hotel_reports']);
+const CAR_MODS = new Set<Module>(['cars']);
+
+function isBranch(item: NavItem): item is NavBranch {
+  return 'children' in item && Array.isArray(item.children);
+}
+
+function leafAllowed(id: Module, busOn: boolean, hotelOn: boolean, carOn: boolean) {
+  if (BUS_MODS.has(id)) return busOn;
+  if (HOTEL_MODS.has(id)) return hotelOn;
+  if (CAR_MODS.has(id)) return carOn;
+  return true;
+}
+
+function readBranchOpen(key: string, fallback: boolean): boolean {
+  try {
+    const v = sessionStorage.getItem(key);
+    if (v === '0') return false;
+    if (v === '1') return true;
+  } catch { /* ignore */ }
+  return fallback;
+}
+
+function greetingIndia(): { hello: string; dateLabel: string } {
+  let hour = new Date().getHours();
+  try {
+    hour = Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Asia/Kolkata' }).format(new Date()));
+  } catch { /* local clock */ }
+  const hello = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  let dateLabel = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+  try {
+    dateLabel = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }).format(new Date());
+  } catch { /* local */ }
+  return { hello, dateLabel };
+}
+
 export default function PartnerPortalPage() {
-  const [module, setModule] = useState<Module>('dashboard');
+  const saved = readSavedModule();
+  const [module, setModule] = useState<Module>(saved);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [hotelNavOpen, setHotelNavOpen] = useState(() => readBranchOpen(HOTEL_NAV_KEY, HOTEL_MODS.has(saved)));
+  const [busNavOpen, setBusNavOpen] = useState(() => readBranchOpen(BUS_NAV_KEY, BUS_MODS.has(saved)));
   const { user, signOut } = useAuth();
   const { go } = useNav();
-  const erpStore = useErpStore();
+  const lastHotelView = useRef<HotelPmsView>('dashboard');
+  const hotelOcc = usePartnerHotelStore((s) => s.occupancyPct);
+  const hotelArrivals = usePartnerHotelStore((s) => s.arrivals);
+  const hotelNotes = usePartnerHotelStore((s) => s.notes);
+  const agencyName = usePartnerStore((s) => s.agencyName);
 
-  useEffect(() => { erpStore.loadAll(); }, []);
+  const busOn = user?.bus_enabled !== false;
+  const hotelOn = user?.hotel_enabled !== false;
+  const carOn = user?.car_enabled !== false;
+
+  const active: Module = useMemo(() => {
+    const m = normalizeModule(module);
+    if (HOTEL_MODS.has(m) && !hotelOn) return 'dashboard';
+    if (BUS_MODS.has(m) && !busOn) return 'dashboard';
+    if (CAR_MODS.has(m) && !carOn) return 'dashboard';
+    return m;
+  }, [module, hotelOn, busOn, carOn]);
+
+  if (HOTEL_MODS.has(active)) lastHotelView.current = HOTEL_VIEW[active as HotelModule];
+  const hotelView = HOTEL_MODS.has(active) ? HOTEL_VIEW[active as HotelModule] : lastHotelView.current;
+
+  const nav = NAV.map((section) => ({
+    ...section,
+    items: section.items.map((item) => {
+      if (isBranch(item)) {
+        return { ...item, children: item.children.filter((c) => leafAllowed(c.id, busOn, hotelOn, carOn)) };
+      }
+      return item;
+    }).filter((item) => {
+      if (isBranch(item)) {
+        if (item.id === 'hotel_erp') return hotelOn && item.children.length > 0;
+        if (item.id === 'bus_erp') return busOn && item.children.length > 0;
+        return item.children.length > 0;
+      }
+      return leafAllowed(item.id, busOn, hotelOn, carOn);
+    }),
+  })).filter((s) => s.items.length);
+
+  useEffect(() => {
+    const pid = user?.user_id || '';
+    let alive = true;
+    const tick = async (full: boolean) => {
+      try {
+        if (full) await useErpStore.getState().loadAll();
+        await usePartnerStore.getState().hydrateLive(pid);
+        if (hotelOn && pid) await usePartnerHotelStore.getState().load(pid);
+        if (pid) await usePartnerCrmStore.getState().load(pid);
+      } catch {
+        /* keep the ERP shell up even if a poll fails */
+      }
+    };
+    void tick(true);
+    const t = window.setInterval(() => { if (alive) void tick(false); }, 45000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, [user?.user_id, hotelOn]);
+
+  function persistBranch(id: BranchId, open: boolean) {
+    if (id === 'hotel_erp') setHotelNavOpen(open);
+    else setBusNavOpen(open);
+    try { sessionStorage.setItem(id === 'hotel_erp' ? HOTEL_NAV_KEY : BUS_NAV_KEY, open ? '1' : '0'); } catch { /* ignore */ }
+  }
 
   function switchModule(m: Module) {
-    if (m === module) return;
-    setLoading(true);
-    setTimeout(() => { setModule(m); setLoading(false); setSidebarOpen(false); }, 180);
+    const next = normalizeModule(m);
+    if (next === active) return;
+    setModule(next);
+    if (HOTEL_MODS.has(next)) persistBranch('hotel_erp', true);
+    if (BUS_MODS.has(next)) persistBranch('bus_erp', true);
+    try { sessionStorage.setItem(MODULE_KEY, next); } catch { /* ignore */ }
+    setSidebarOpen(false);
+  }
+
+  function onBranchParentClick(item: NavBranch) {
+    const open = item.id === 'hotel_erp' ? hotelNavOpen : busNavOpen;
+    const childSet = item.id === 'hotel_erp' ? HOTEL_MODS : BUS_MODS;
+    const first = item.children[0]?.id;
+    if (!open) {
+      persistBranch(item.id, true);
+      if (!childSet.has(active) && first) switchModule(first);
+      return;
+    }
+    persistBranch(item.id, false);
   }
 
   function handleSignOut() { signOut(); go({ name: 'home' }); }
+
+  const greet = greetingIndia();
+  const firstName = (user?.name || '').trim().split(/\s+/)[0] || (user?.email || '').split('@')[0] || 'Partner';
+  const notesList = Array.isArray(hotelNotes) ? hotelNotes : [];
+  const arrivalsList = Array.isArray(hotelArrivals) ? hotelArrivals : [];
+  const occPct = Number(hotelOcc) || 0;
+  const openTasks = notesList.filter((n) => n && n.status && n.status !== 'done' && n.status !== 'closed').length;
+  const contextBits = [
+    greet.dateLabel,
+    agencyName && agencyName !== firstName ? agencyName : '',
+    occPct > 0 ? `${occPct}% occupancy` : '',
+    arrivalsList.length ? `${arrivalsList.length} arrival${arrivalsList.length === 1 ? '' : 's'} today` : '',
+    openTasks ? `${openTasks} open task${openTasks === 1 ? '' : 's'}` : '',
+  ].filter(Boolean);
 
   return (
     <div className="flex min-h-screen bg-[var(--bg-page)]">
       {/* Sidebar — Hostinger-style icon rail */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[72px] flex-col border-r bg-[var(--bg-surface)] transition-transform lg:static lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        className={`fixed inset-y-0 left-0 z-40 flex w-[236px] flex-col border-r bg-[var(--bg-surface)] transition-transform lg:static lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         style={{ borderColor: 'var(--border)' }}
       >
         {/* Logo / brand */}
-        <div className="flex h-16 shrink-0 flex-col items-center justify-center border-b" style={{ borderColor: 'var(--border)' }}>
-          <span className="font-display text-[10px] font-extrabold uppercase tracking-widest" style={{ color: 'var(--text-primary)' }}>YLT</span>
-          <span className="text-[8px] font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>ERP</span>
+        <div className="flex h-16 shrink-0 items-center gap-2 border-b px-4" style={{ borderColor: 'var(--border)' }}>
+          <span className="font-display text-sm font-extrabold tracking-wide" style={{ color: 'var(--text-primary)' }}>YLT ERP</span>
+          <span className="rounded-full bg-crimson-600/10 px-2 py-0.5 text-[9px] font-bold uppercase text-crimson-700">Partner</span>
         </div>
 
-        {/* Nav items */}
-        <nav className="flex flex-1 flex-col items-center gap-0.5 overflow-y-auto py-3 pb-20">
-          {/* Back to Home */}
+        <nav className="flex-1 overflow-y-auto px-3 py-3 pb-20">
           <button
             onClick={() => { go({ name: 'home' }); setSidebarOpen(false); }}
-            className="group flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition hover:bg-[var(--bg-raised)]"
-            title="Back to Home"
+            className="mb-3 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-[var(--bg-raised)]"
+            style={{ color: 'var(--text-muted)' }}
           >
-            <Home className="h-5 w-5" style={{ color: 'var(--text-muted)' }} />
-            <span className="text-center text-[9px] font-semibold leading-tight" style={{ color: 'var(--text-muted)' }}>Home</span>
+            <Home className="h-4 w-4" /> Public site
           </button>
 
-          {/* Divider */}
-          <div className="my-1 h-px w-10 rounded" style={{ background: 'var(--border)' }} />
-
-          {NAV.map((section) =>
-            section.items.map((item) => {
-              const active = module === item.id;
-              const shortLabel = item.label
-                .replace('& ', '')
-                .replace('Booking Engine', 'Bookings')
-                .replace('Schedule Planner', 'Planner')
-                .replace('Operations', 'Ops')
-                .replace('Workforce', 'Crew')
-                .replace('Compliance', 'Comply')
-                .replace('Intelligence', 'Insights')
-                .replace('Branding', '')
-                .replace('Assistant', 'AI')
-                .replace('Profile ', '')
-                .trim()
-                .split(' ')
-                .slice(0, 2)
-                .join(' ');
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => switchModule(item.id)}
-                  title={item.label}
-                  className={`group relative flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition-all duration-150 ${
-                    active
-                      ? 'bg-crimson-600/15'
-                      : 'hover:bg-[var(--bg-raised)]'
-                  }`}
-                >
-                  {active && (
-                    <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-crimson-600" />
-                  )}
-                  <item.icon className={`h-5 w-5 transition-transform ${active ? 'text-crimson-600' : 'group-hover:scale-110'}`} />
-                  <span
-                    className={`text-center text-[9px] font-semibold leading-tight ${
-                      active ? 'text-crimson-600' : ''
-                    }`}
-                    style={active ? undefined : { color: 'var(--text-muted)' }}
+          {nav.map((section) => (
+            <div key={section.heading || 'home'} className="mb-3">
+              {section.heading ? <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{section.heading}</p> : null}
+              {section.items.map((item) => {
+                if (isBranch(item)) {
+                  const branchOpen = item.id === 'hotel_erp' ? hotelNavOpen : busNavOpen;
+                  const branchActive = item.id === 'hotel_erp' ? HOTEL_MODS.has(active) : BUS_MODS.has(active);
+                  return (
+                    <div key={item.id} className="mb-1">
+                      <div
+                        className={`relative mb-0.5 flex w-full items-center rounded-xl transition ${branchActive ? 'bg-crimson-600/12 font-semibold text-crimson-700' : 'hover:bg-[var(--bg-raised)]'}`}
+                        style={branchActive ? undefined : { color: 'var(--text-secondary)' }}
+                      >
+                        {branchActive && <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r bg-crimson-600" />}
+                        <button
+                          type="button"
+                          onClick={() => onBranchParentClick(item)}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left text-sm"
+                        >
+                          <item.icon className={`h-4 w-4 ${branchActive ? 'text-crimson-600' : ''}`} />
+                          <span className="flex-1 truncate">{item.label}</span>
+                        </button>
+                        <button
+                          type="button"
+                          aria-expanded={branchOpen}
+                          aria-label={branchOpen ? `Collapse ${item.label}` : `Expand ${item.label}`}
+                          onClick={(e) => { e.stopPropagation(); persistBranch(item.id, !branchOpen); }}
+                          className="mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg hover:bg-[var(--bg-raised)]"
+                        >
+                          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${branchActive ? 'text-crimson-600' : ''} ${branchOpen ? '' : '-rotate-90'}`} />
+                        </button>
+                      </div>
+                      {branchOpen && (
+                        <div className="ml-3 border-l pl-2" style={{ borderColor: 'var(--border)' }}>
+                          {item.children.map((child) => {
+                            const childActive = active === child.id;
+                            return (
+                              <button
+                                key={child.id}
+                                onClick={() => switchModule(child.id)}
+                                className={`relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition ${childActive ? 'bg-crimson-600/12 font-semibold text-crimson-700' : 'hover:bg-[var(--bg-raised)]'}`}
+                                style={childActive ? undefined : { color: 'var(--text-secondary)' }}
+                              >
+                                <child.icon className={`h-3.5 w-3.5 ${childActive ? 'text-crimson-600' : ''}`} />
+                                <span className="truncate">{child.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                const navActive = active === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => switchModule(item.id)}
+                    className={`relative mb-0.5 flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition ${navActive ? 'bg-crimson-600/12 font-semibold text-crimson-700' : 'hover:bg-[var(--bg-raised)]'}`}
+                    style={navActive ? undefined : { color: 'var(--text-secondary)' }}
                   >
-                    {shortLabel}
-                  </span>
-                </button>
-              );
-            })
-          )}
+                    {navActive && <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r bg-crimson-600" />}
+                    <item.icon className={`h-4 w-4 ${navActive ? 'text-crimson-600' : ''}`} />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
-        {/* Sign out at bottom */}
-        <div className="shrink-0 border-t pb-3 pt-2" style={{ borderColor: 'var(--border)' }}>
-          <button
-            onClick={handleSignOut}
-            className="flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2.5 transition hover:bg-red-500/10"
-            title="Sign Out"
-          >
-            <LogOut className="h-5 w-5 text-red-500" />
-            <span className="text-[9px] font-semibold text-red-500">Sign Out</span>
+        <div className="shrink-0 border-t p-3" style={{ borderColor: 'var(--border)' }}>
+          <button onClick={handleSignOut} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-red-500 hover:bg-red-500/10">
+            <LogOut className="h-4 w-4" /> Sign out
           </button>
         </div>
       </aside>
 
-      {sidebarOpen && <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && <div className="erp-backdrop fixed inset-0 z-30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
       {/* Main */}
       <div className="flex-1 lg:ml-0">
         {/* Topbar */}
-        <div className="flex h-16 items-center justify-between border-b bg-[var(--bg-surface)] px-4 lg:px-6" style={{ borderColor: 'var(--border)' }}>
-          <div className="flex items-center gap-3">
+        <div className="flex min-h-16 items-center justify-between border-b bg-[var(--bg-surface)] px-4 py-2.5 lg:px-6" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex min-w-0 items-center gap-3">
             <button onClick={() => setSidebarOpen(true)} className="lg:hidden" style={{ color: 'var(--text-secondary)' }}><Menu className="h-5 w-5" /></button>
-            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>YLT Partner ERP · Manage your fleet, bookings &amp; earnings</p>
+            <div className="min-w-0">
+              <p className="truncate font-display text-[15px] font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+                {greet.hello}, {firstName}
+              </p>
+              <p className="truncate text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                {contextBits.join(' · ')}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <div className="hidden items-center gap-2 rounded-xl border bg-[var(--bg-raised)] px-3 py-1.5 sm:flex" style={{ borderColor: 'var(--border)' }}>
@@ -195,28 +433,40 @@ export default function PartnerPortalPage() {
           </div>
         </div>
 
-        {/* Content with page transition */}
+        {/* Content — no key remount / page-enter flicker on hotel sub-nav */}
         <div className="container-fluid py-6">
-          {loading ? (
-            <ErpLoader label="Loading module…" />
-          ) : (
-            <div key={module} className="erp-page-enter">
-              {module === 'dashboard' && <Dashboard onNavigate={switchModule} />}
-              {module === 'bus_ops' && <BusOperationsSuite />}
-              {module === 'crew' && <CrewWorkforceHub />}
-              {module === 'seat_inv' && <SeatInventoryEngine />}
-              {module === 'trip_plan' && <TripSchedulePlanner />}
-              {module === 'earnings_center' && <EarningsPayoutCenter />}
-              {module === 'maint_desk' && <MaintenanceComplianceDesk />}
-              {module === 'intel' && <IntelligenceInsights />}
-              {module === 'expense_ledger' && <ExpenseLedgerManager />}
-              {module === 'partner_profile' && <PartnerProfileBranding />}
-              {module === 'access_sec' && <AccessSecurity />}
-              {module === 'cars' && <CarFleet />}
-              {module === 'hotels' && <HotelERP />}
-              {module === 'ai' && <AiAssistant />}
-            </div>
+          {active === 'dashboard' && <Dashboard onNavigate={switchModule} />}
+          {busOn && active === 'bus_desk' && <BusGdsDesk onNavigate={(id) => switchModule(id as Module)} />}
+          {busOn && active === 'bus_config' && <BusConfiguration />}
+          {busOn && (active === 'bus_fleet' || active === 'bus_health' || active === 'bus_expenses' || active === 'bus_permits') && (
+            <BusOperationsSuite view={active === 'bus_health' ? 'health' : active === 'bus_expenses' ? 'expenses' : active === 'bus_permits' ? 'permits' : 'fleet'} />
           )}
+          {busOn && active === 'bus_crew' && <CrewWorkforceHub />}
+          {busOn && active === 'bus_seats' && <SeatInventoryEngine />}
+          {busOn && active === 'bus_trips' && <TripSchedulePlanner />}
+          {busOn && active === 'bus_bookings' && <BusBookingsBoard />}
+          {busOn && active === 'bus_customers' && <PartnerCrm mode="customers" />}
+          {busOn && (active === 'bus_search' || active === 'bus_print' || active === 'bus_cities' || active === 'bus_types' || active === 'bus_cancel' || active === 'bus_analytics' || active === 'bus_campaigns' || active === 'bus_offers' || active === 'bus_deposits') && (
+            <BusOpsBoards view={active.replace('bus_', '') as 'search' | 'print' | 'cities' | 'types' | 'cancel' | 'analytics' | 'campaigns' | 'offers' | 'deposits'} />
+          )}
+          {active === 'jobs' && <Dashboard onNavigate={switchModule} />}
+          {active === 'earnings_center' && <EarningsPayoutCenter />}
+          {active === 'maint_desk' && <MaintenanceComplianceDesk />}
+          {active === 'intel' && <IntelligenceInsights />}
+          {active === 'expense_ledger' && <ExpenseLedgerManager />}
+          {active === 'partner_profile' && <PartnerProfileBranding />}
+          {active === 'access_sec' && (
+            <ErrorBoundary fallbackLabel="Access & Security failed to render.">
+              <AccessSecurity />
+            </ErrorBoundary>
+          )}
+          {active === 'cars' && carOn && <CarFleet />}
+          {active === 'crm_customers' && <PartnerCrm mode="customers" />}
+          {active === 'crm_guestbook' && <PartnerCrm mode="guestbook" />}
+          {hotelOn && HOTEL_MODS.has(active) && (
+            <HotelERP view={hotelView} />
+          )}
+          {active === 'ai' && <AiAssistant />}
         </div>
       </div>
     </div>
@@ -264,9 +514,9 @@ function Badge({ tone, children }: { tone: 'green' | 'amber' | 'red' | 'blue' | 
 function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode; wide?: boolean }) {
   if (!open) return null;
   return (
-    <div className="erp-overlay-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="erp-overlay-enter erp-backdrop fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className={`erp-modal-enter max-h-[90vh] w-full overflow-y-auto rounded-2xl border bg-[var(--bg-surface)] p-6 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
+        className={`erp-modal-enter erp-modal-card max-h-[90vh] w-full overflow-y-auto rounded-2xl border bg-[var(--bg-surface)] p-6 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
         style={{ borderColor: 'var(--border)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -297,6 +547,17 @@ const todayStr = new Date().toISOString().slice(0, 10);
 function Dashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   const { buses, cars, drivers, bookings, alerts, commissionRate } = usePartnerStore();
   const { hotels } = usePartnerHotelStore();
+  const { channelSales, expenses: erpExpenses, earnings: erpEarn } = useErpStore();
+  const busList = Array.isArray(buses) ? buses : [];
+  const carList = Array.isArray(cars) ? cars : [];
+  const driverList = Array.isArray(drivers) ? drivers : [];
+  const bookingList = Array.isArray(bookings) ? bookings : [];
+  const alertList = Array.isArray(alerts) ? alerts : [];
+  const hotelList = Array.isArray(hotels) ? hotels : [];
+  const sales = Array.isArray(channelSales) ? channelSales : [];
+  const erpExp = Array.isArray(erpExpenses) ? erpExpenses : [];
+  const erpE = Array.isArray(erpEarn) ? erpEarn : [];
+  const aiPl = profitForecast(sales, erpExp, erpE, 30);
   const earnings = partnerEarnings(bookings, commissionRate);
   const sla = slaCompliance(buses, cars, [], drivers);
   const hotelSla = hotelSlaCompliance(hotels);
@@ -324,9 +585,9 @@ function Dashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
   ].slice(0, 6);
 
   const quickActions: { label: string; icon: React.ComponentType<{ className?: string }>; target: Module }[] = [
-    { label: 'New Trip', icon: Route, target: 'trip_plan' },
-    { label: 'Add Bus', icon: Bus, target: 'bus_ops' },
-    { label: 'Add Crew', icon: Users, target: 'crew' },
+    { label: 'New Trip', icon: Route, target: 'bus_trips' },
+    { label: 'Add Bus', icon: Bus, target: 'bus_fleet' },
+    { label: 'Add Crew', icon: Users, target: 'bus_crew' },
     { label: 'Record Expense', icon: Receipt, target: 'expense_ledger' },
   ];
 
@@ -336,10 +597,12 @@ function Dashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
       {/* Row 1: 4 KPI cards (12-col grid, each spans 3) */}
       <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Bookings" value={String(bookings.length)} sub={`${bookings.filter((b) => b.status === 'confirmed').length} confirmed`} icon={Ticket} tone="crimson" trend={{ value: '+12% vs last week', up: true }} onClick={() => onNavigate('seat_inv')} /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Bookings" value={String(bookings.length)} sub={`${bookings.filter((b) => b.status === 'confirmed').length} confirmed`} icon={Ticket} tone="crimson" trend={{ value: '+12% vs last week', up: true }} onClick={() => onNavigate('bus_bookings')} /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Net Earnings" value={`₹${fmtINR(earnings.partner)}`} sub={`of ₹${fmtINR(earnings.total)} gross`} icon={Wallet} tone="green" trend={{ value: '+8% MoM', up: true }} onClick={() => onNavigate('earnings_center')} /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Fleet Health" value={`${fleetHealth}%`} sub={`${buses.length + cars.length} vehicles`} icon={Gauge} tone="blue" onClick={() => onNavigate('maint_desk')} /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="SLA Compliance" value={`${Math.round((sla + hotelSla) / 2)}%`} sub={`Transport ${sla}% · Hotel ${hotelSla}%`} icon={ShieldCheck} tone={sla >= 90 ? 'green' : 'amber'} onClick={() => onNavigate('intel')} /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="AI 30d profit" value={`₹${fmtINR(aiPl.predictedProfit)}`} sub={`${aiPl.predictedMarginPct.toFixed(1)}% pred. margin · ${aiPl.confidence}`} icon={Sparkles} tone="teal" onClick={() => onNavigate('intel')} /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="AI 30d revenue" value={`₹${fmtINR(aiPl.predictedRevenue)}`} sub={`Diesel shock profit ₹${fmtINR(aiPl.dieselShockProfit)}`} icon={TrendingUp} tone="amber" onClick={() => onNavigate('intel')} /></div>
       </div>
 
       {/* Row 2: Quick actions */}
@@ -404,10 +667,10 @@ function Dashboard({ onNavigate }: { onNavigate: (m: Module) => void }) {
 
       {/* Row 4: Secondary KPIs (12-col) */}
       <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Buses" value={String(buses.length)} sub={`${buses.filter((b) => b.status === 'active').length} active`} icon={Bus} tone="crimson" onClick={() => onNavigate('bus_ops')} /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Buses" value={String(buses.length)} sub={`${buses.filter((b) => b.status === 'active').length} active`} icon={Bus} tone="crimson" onClick={() => onNavigate('bus_fleet')} /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Total Cars" value={String(cars.length)} sub={`${cars.filter((c) => c.status === 'active').length} active`} icon={Car} tone="blue" onClick={() => onNavigate('cars')} /></div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Hotels" value={String(hotels.length)} sub={`${occ}% avg occ`} icon={Hotel} tone="green" onClick={() => onNavigate('hotels')} /></div>
-        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Hotel Revenue" value={`₹${fmtINR(hotelRev)}`} sub="Monthly" icon={DollarSign} tone="teal" onClick={() => onNavigate('hotels')} /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Hotels" value={String(hotels.length)} sub={`${occ}% avg occ`} icon={Hotel} tone="green" onClick={() => onNavigate('hotel_dashboard')} /></div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Hotel Revenue" value={`₹${fmtINR(hotelRev)}`} sub="Monthly" icon={DollarSign} tone="teal" onClick={() => onNavigate('hotel_reports')} /></div>
       </div>
     </div>
   );
@@ -418,6 +681,52 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between">
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
       <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{value}</span>
+    </div>
+  );
+}
+
+function BusBookingsBoard() {
+  const bookings = usePartnerStore((s) => Array.isArray(s.bookings) ? s.bookings : []);
+  const rows = bookings.filter((b) => b.type === 'bus');
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Bus</p>
+        <h1 className="font-display text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>Bookings</h1>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Tickets sold on your published trips. Contacts upsert into shared CRM.</p>
+      </div>
+      {!rows.length ? (
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No bus bookings yet. Published trips appear on the public search once you add schedules.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: 'var(--border)' }}>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                <th className="px-3 py-2">PNR</th>
+                <th className="px-3 py-2">Route</th>
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Customer</th>
+                <th className="px-3 py-2">Amount</th>
+                <th className="px-3 py-2">Channel</th>
+                <th className="px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((b) => (
+                <tr key={b.id || b.pnr} className="border-b" style={{ borderColor: 'var(--border)' }}>
+                  <td className="px-3 py-2.5 font-mono text-xs text-crimson-600">{b.pnr}</td>
+                  <td className="px-3 py-2.5">{b.route}</td>
+                  <td className="px-3 py-2.5">{b.date}</td>
+                  <td className="px-3 py-2.5">{b.customer || '—'}</td>
+                  <td className="px-3 py-2.5">₹{fmtINR(b.amount)}</td>
+                  <td className="px-3 py-2.5 capitalize">{b.channel || 'website'}</td>
+                  <td className="px-3 py-2.5 capitalize">{b.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -653,60 +962,30 @@ const AI_QUICK = [
 ];
 
 function AiAssistant() {
-  const store = usePartnerStore();
+  const { user } = useAuth();
   const [input, setInput] = useState('');
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
 
-  function answer(q: string): string {
-    const s = store;
-    const earnings = partnerEarnings(s.bookings, s.commissionRate);
-    const today = new Date().toISOString().slice(0, 10);
-    const l = q.toLowerCase();
-    if (l.includes('earning') && l.includes('today')) {
-      const t = s.bookings.filter((b) => b.date === today && b.status !== 'cancelled').reduce((x, b) => x + b.amount, 0);
-      return `Today's gross bookings: ₹${fmtINR(t)}. Your share (${(100 - s.commissionRate * 100).toFixed(0)}%): ₹${fmtINR(Math.round(t * (1 - s.commissionRate)))}.`;
-    }
-    if (l.includes('sla')) {
-      const buses = s.buses.filter((b) => b.nextMaintenance <= today || b.permitExpiry <= today || b.status === 'maintenance');
-      return buses.length ? `${buses.length} bus(es) need SLA verification: ${buses.map((b) => b.name).join(', ')}.` : 'All buses are SLA-compliant.';
-    }
-    if (l.includes('profit') && l.includes('car')) {
-      const byCar = s.cars.map((c) => ({ c, n: s.bookings.filter((b) => b.type === 'car' && b.status !== 'cancelled').length }));
-      byCar.sort((a, b) => b.n - a.n);
-      return `Most profitable cars: ${byCar.slice(0, 3).map((x) => `${x.c.name} (${x.n} bookings)`).join(', ')}.`;
-    }
-    if (l.includes('active') && l.includes('driver')) {
-      const active = s.drivers.filter((d) => d.status === 'active');
-      return `${active.length} active drivers: ${active.map((d) => d.name).join(', ')}.`;
-    }
-    if (l.includes('demand')) {
-      return `Predicted demand for tonight: ${s.buses.filter((b) => b.status === 'active').length} buses online. Expect ${Math.round(s.bookings.length / 7)} bookings based on weekly trend.`;
-    }
-    if (l.includes('losing') || l.includes('route') && l.includes('money')) {
-      const cancelled = s.bookings.filter((b) => b.status === 'cancelled');
-      return cancelled.length ? `${cancelled.length} cancelled bookings lost revenue: ${cancelled.map((b) => b.route).join(', ')}.` : 'No routes are losing money currently.';
-    }
-    if (l.includes('maintenance') && l.includes('schedule')) {
-      const due = [...s.buses, ...s.cars].filter((v: any) => v.nextMaintenance <= new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10));
-      return due.length ? `Maintenance schedule (next 14 days): ${due.map((v: any) => `${v.name} on ${v.nextMaintenance}`).join(', ')}.` : 'No maintenance due in the next 2 weeks.';
-    }
-    if (l.includes('low') && l.includes('fuel')) {
-      const low = [...s.buses, ...s.cars].filter((v: any) => v.fuelPct < 30);
-      return low.length ? `Low fuel vehicles: ${low.map((v: any) => `${v.name} (${v.fuelPct}%)`).join(', ')}.` : 'All vehicles have adequate fuel.';
-    }
-    if (l.includes('permit')) {
-      const exp = s.buses.filter((b) => b.permitExpiry <= new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10));
-      return exp.length ? `Permits expiring (30 days): ${exp.map((b) => `${b.name} on ${b.permitExpiry}`).join(', ')}.` : 'No permits expiring soon.';
-    }
-    return `I can help with earnings, SLA, profitability, drivers, demand, maintenance, fuel, and permits. Try one of the quick actions. Total earnings so far: ₹${fmtINR(earnings.partner)}.`;
-  }
-
-  function ask(q: string) {
-    setInput(q);
+  async function ask(q: string) {
+    const prompt = q.trim();
+    if (!prompt) return;
+    setInput(prompt);
     setBusy(true);
     setReply('');
-    setTimeout(() => { setReply(answer(q)); setBusy(false); }, 400);
+    try {
+      const email = (user?.email || 'partner').toLowerCase();
+      const res = await apiFetch('/api/chat.php', {
+        method: 'POST',
+        body: JSON.stringify({ prompt, email, thread: email, channel: 'erp' }),
+      });
+      const data = await res.json();
+      setReply(data.reply ?? data.error ?? 'No reply from live assistant.');
+    } catch {
+      setReply('Network error talking to /api/chat.php.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

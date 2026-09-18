@@ -1,12 +1,13 @@
 import { useMemo, useState, useEffect } from 'react';
-import { Users, Star, Clock, BadgeCheck, Check, MapPin, Filter, Download, Mail, CheckCircle2 } from 'lucide-react';
+import { Users, Star, Clock, BadgeCheck, Check, MapPin, Filter, CheckCircle2 } from 'lucide-react';
 import { mockCarPoolListings, MOCK_CITIES, type CarPoolListing, type CarRentalType } from '../data/mockCars';
 import { formatINR, formatTime12 } from '../lib/format';
 import { usePoolStore } from '../store/poolStore';
 import { useCheckoutStore } from '../store/checkoutStore';
 import { TAX_RATE, surgeMultiplier, currentPricingContext } from '../lib/business';
-import { buildTicket, printTicket, type TicketData } from '../lib/ticket';
+import { buildTicket, type TicketData } from '../lib/ticket';
 import { recordBooking } from './MyBookingsPage';
+import TicketActions from './TicketActions';
 import type { View } from '../store/nav';
 
 export default function CarPoolPage({ go, onRequireAuth }: { go: (v: View) => void; onRequireAuth?: (action: string, proceed?: () => void) => void }) {
@@ -183,8 +184,7 @@ function PoolCheckout({ pool, go, onRequireAuth }: { pool: CarPoolListing; go: (
         <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{pool.driver_name} · {pool.from_city} → {pool.to_city}</p>
         <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>Total: {formatINR(total)} {surge > 1 && `(surge ${surge.toFixed(1)}x)`}</p>
         <div className="mt-4 space-y-2">
-          <button onClick={() => printTicket(ticket)} className="btn-primary w-full text-xs"><Download className="h-4 w-4" /> Download PDF Ticket</button>
-          <button onClick={() => alert('Confirmation email sent.')} className="btn-ghost w-full text-xs"><Mail className="h-4 w-4" /> Email Confirmation</button>
+          <TicketActions ticket={ticket} />
           <button onClick={() => { checkout.reset(); go({ name: 'home' }); }} className="btn-ghost w-full text-xs">Back to Home</button>
         </div>
       </div>

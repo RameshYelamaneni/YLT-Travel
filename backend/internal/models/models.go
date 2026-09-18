@@ -82,22 +82,24 @@ type Booking struct {
 // --- Hotel bookings ---
 
 type HotelBooking struct {
-	ID         string    `json:"id"`
-	PNR        string    `json:"pnr"`
-	HotelID    sql.NullString `json:"hotelId"`
-	HotelName  string    `json:"hotelName"`
-	City       string    `json:"city"`
-	GuestName  string    `json:"guestName"`
-	GuestEmail string    `json:"guestEmail"`
-	GuestPhone sql.NullString `json:"guestPhone"`
-	CheckIn   string    `json:"checkIn"`
-	CheckOut  string    `json:"checkOut"`
-	Rooms     int       `json:"rooms"`
-	Guests    int       `json:"guests"`
-	RoomType  string    `json:"roomType"`
-	TotalAmount float64 `json:"totalAmount"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID             string         `json:"id"`
+	PNR            string         `json:"pnr"`
+	HotelID        sql.NullString `json:"hotel_id"`
+	HotelName      string         `json:"hotel_name"`
+	City           string         `json:"city"`
+	GuestName      string         `json:"guest_name"`
+	GuestEmail     string         `json:"guest_email"`
+	GuestPhone     sql.NullString `json:"guest_phone"`
+	CheckIn        string         `json:"check_in"`
+	CheckOut       string         `json:"check_out"`
+	Rooms          int            `json:"rooms"`
+	Guests         int            `json:"guests"`
+	RoomType       string         `json:"room_type"`
+	TotalAmount    float64        `json:"total_amount"`
+	Status         string         `json:"status"`
+	UserIdentifier sql.NullString `json:"user_identifier"`
+	PaymentStatus  string         `json:"payment_status"`
+	CreatedAt      time.Time      `json:"created_at"`
 }
 
 // --- Directors ---
@@ -135,14 +137,16 @@ type Hotel struct {
 // --- Offers ---
 
 type Offer struct {
-	ID           string    `json:"id"`
-	PromoCode    string    `json:"promoCode"`
-	Title        string    `json:"title"`
-	Description  sql.NullString `json:"description"`
-	DiscountValue float64 `json:"discountValue"`
-	ExpiryDate   string    `json:"expiryDate"`
-	IsActive     bool      `json:"isActive"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID            string    `json:"id"`
+	PromoCode     string    `json:"promo_code"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	DiscountValue string    `json:"discount_value"`
+	ExpiryDate    string    `json:"expiry_date"`
+	IsActive      bool      `json:"is_active"`
+	Tag           string    `json:"tag"`
+	Tone          string    `json:"tone"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // --- Routes ---

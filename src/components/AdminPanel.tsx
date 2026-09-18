@@ -2,24 +2,70 @@ import { useEffect, useState } from 'react';
 import {
   Plus, Trash2, Pencil, Save, X, Image as ImageIcon, AlertCircle, Loader2, Check,
   Upload, User as UserIcon, Mail, Shield, Users, Send, Briefcase, Edit2, BadgeCheck,
-  FolderOpen, Download, FileText, Folder, File as FileIcon, KeyRound, Copy, RefreshCw,
+  FolderOpen, Download, FileText, Folder, File as FileIcon, KeyRound, Copy, RefreshCw, CreditCard, Boxes, Headphones,
 } from 'lucide-react';
 import type { Director } from '../types';
 import { fetchDirectors, saveDirector, deleteDirector } from '../lib/cms';
-// Email templates are managed via the Hostinger PHP API (email-templates.php).
-import { useNav } from '../store/nav';
+import { fetchOffers, saveOffer, deleteOffer, type YltOffer } from '../lib/offers';
+// Email templates are managed via the Go API.
 import { useAuth } from '../lib/auth';
 import LoginModal from './LoginModal';
-
-const API = import.meta.env.VITE_API_BASE_URL ?? '';
+import { apiFetch } from '../lib/api';
+import { Drawer } from './erp/ui';
+import KycQueueTab from './admin/KycQueueTab';
 
 type Draft = { id: string; name: string; role: string; bio: string; image_url: string | null; linkedin_url: string | null; order_index: number };
 
-type Tab = 'directors' | 'email' | 'partners' | 'employees' | 'templates' | 'files';
+type Tab = 'directors' | 'offers' | 'email' | 'payments' | 'inventory' | 'partnerApps' | 'agentApps' | 'insuranceApps' | 'employees' | 'templates' | 'files' | 'care' | 'careers';
+
+function staffRoleOf(role?: string) {
+  return String(role || 'admin').toLowerCase();
+}
+
+function isCoreAdminRole(role?: string) {
+  const r = staffRoleOf(role);
+  return r === 'admin' || r === '';
+}
+
+function canPartnerQueue(role?: string) {
+  const r = staffRoleOf(role);
+  return isCoreAdminRole(role) || r === 'onboard' || r === 'partner_onboard';
+}
+
+function canAgentQueue(role?: string) {
+  const r = staffRoleOf(role);
+  return isCoreAdminRole(role) || r === 'onboard' || r === 'agent_onboard';
+}
+
+function canInsuranceQueue(role?: string) {
+  const r = staffRoleOf(role);
+  return isCoreAdminRole(role) || r === 'onboard';
+}
+
+function onboardFamily(role?: string) {
+  const r = staffRoleOf(role);
+  return r === 'onboard' || r === 'partner_onboard' || r === 'agent_onboard';
+}
+
+function defaultAdminTab(role?: string): Tab {
+  const r = staffRoleOf(role);
+  if (r === 'agent_onboard') return 'agentApps';
+  if (r === 'partner_onboard' || r === 'onboard') return 'partnerApps';
+  return 'directors';
+}
 
 interface SmtpSettings {
   smtp_host: string; smtp_port: number; smtp_user: string; smtp_password: string;
   smtp_from_email: string; smtp_from_name: string; smtp_secure: boolean; email_enabled: boolean;
+  smtp_password_set?: boolean;
+}
+
+interface PaymentSettings {
+  payment_provider: 'razorpay' | 'stripe' | 'off';
+  payments_enabled: boolean;
+  razorpay_key_id: string;
+  razorpay_secret: string;
+  razorpay_secret_set?: boolean;
 }
 
 function blankDraft(): Draft {
@@ -27,9 +73,10 @@ function blankDraft(): Draft {
 }
 
 export default function AdminPanel() {
-  const { go } = useNav();
   const { user } = useAuth();
-  const [tab, setTab] = useState<Tab>('directors');
+  const role = user?.role;
+  const fullAdmin = isCoreAdminRole(role) || !onboardFamily(role);
+  const [tab, setTab] = useState<Tab>(defaultAdminTab(role));
   const [loginOpen, setLoginOpen] = useState(false);
 
   if (!user) {
@@ -47,51 +94,79 @@ export default function AdminPanel() {
   }
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] bg-[var(--bg-page)]">
+    <div className="flex min-h-[calc(100vh-4rem)] flex-col bg-[var(--bg-page)] lg:flex-row">
       {/* Sidebar */}
       <aside className="hidden w-64 shrink-0 border-r bg-[var(--bg-surface)] lg:flex lg:flex-col" style={{ borderColor: 'var(--border)' }}>
         <div className="flex h-16 items-center border-b px-4" style={{ borderColor: 'var(--border)' }}>
-          <span className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>Admin Panel</span>
+          <span className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>{fullAdmin ? 'Admin Panel' : 'Onboard'}</span>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+          {fullAdmin && (
+            <>
           <SideBtn active={tab === 'directors'} onClick={() => setTab('directors')} icon={<Users className="h-4 w-4" />} label="Directors" />
+          <SideBtn active={tab === 'offers'} onClick={() => setTab('offers')} icon={<BadgeCheck className="h-4 w-4" />} label="Offers" />
           <SideBtn active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-4 w-4" />} label="Email & OTP" />
-          <SideBtn active={tab === 'partners'} onClick={() => setTab('partners')} icon={<Briefcase className="h-4 w-4" />} label="Agent Partners" />
+          <SideBtn active={tab === 'payments'} onClick={() => setTab('payments')} icon={<CreditCard className="h-4 w-4" />} label="Payments" />
+          <SideBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Boxes className="h-4 w-4" />} label="Inventory" />
+          <SideBtn active={tab === 'care'} onClick={() => setTab('care')} icon={<Headphones className="h-4 w-4" />} label="YLT Care" />
+          <SideBtn active={tab === 'careers'} onClick={() => setTab('careers')} icon={<Briefcase className="h-4 w-4" />} label="Post a job" />
+            </>
+          )}
+          {canPartnerQueue(role) && <SideBtn active={tab === 'partnerApps'} onClick={() => setTab('partnerApps')} icon={<Briefcase className="h-4 w-4" />} label="Partner applications" />}
+          {canAgentQueue(role) && <SideBtn active={tab === 'agentApps'} onClick={() => setTab('agentApps')} icon={<Users className="h-4 w-4" />} label="Agent applications" />}
+          {canInsuranceQueue(role) && <SideBtn active={tab === 'insuranceApps'} onClick={() => setTab('insuranceApps')} icon={<Shield className="h-4 w-4" />} label="Insurance applications" />}
+          {fullAdmin && (
+            <>
           <SideBtn active={tab === 'employees'} onClick={() => setTab('employees')} icon={<Shield className="h-4 w-4" />} label="Employees" />
           <SideBtn active={tab === 'templates'} onClick={() => setTab('templates')} icon={<Mail className="h-4 w-4" />} label="Email Templates" />
           <SideBtn active={tab === 'files'} onClick={() => setTab('files')} icon={<FolderOpen className="h-4 w-4" />} label="File Manager" />
+            </>
+          )}
         </nav>
       </aside>
 
       {/* Mobile tab strip */}
       <div className="flex w-full flex-col lg:hidden">
         <div className="flex items-center justify-between border-b bg-[var(--bg-surface)] px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-          <h1 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Admin Panel</h1>
+          <h1 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>{fullAdmin ? 'Admin Panel' : 'Onboard'}</h1>
         </div>
         <div className="flex gap-1 overflow-x-auto bg-[var(--bg-raised)] p-1">
+          {fullAdmin && (
+            <>
           <TabBtn active={tab === 'directors'} onClick={() => setTab('directors')} icon={<Users className="h-4 w-4" />} label="Directors" />
-          <TabBtn active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-4 w-4" />} label="Email & OTP" />
-          <TabBtn active={tab === 'partners'} onClick={() => setTab('partners')} icon={<Briefcase className="h-4 w-4" />} label="Partners" />
+          <TabBtn active={tab === 'offers'} onClick={() => setTab('offers')} icon={<BadgeCheck className="h-4 w-4" />} label="Offers" />
+          <TabBtn active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-4 w-4" />} label="Email" />
+          <TabBtn active={tab === 'payments'} onClick={() => setTab('payments')} icon={<CreditCard className="h-4 w-4" />} label="Payments" />
+          <TabBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Boxes className="h-4 w-4" />} label="Inventory" />
+          <TabBtn active={tab === 'care'} onClick={() => setTab('care')} icon={<Headphones className="h-4 w-4" />} label="Care" />
+          <TabBtn active={tab === 'careers'} onClick={() => setTab('careers')} icon={<Briefcase className="h-4 w-4" />} label="Jobs" />
+            </>
+          )}
+          {canPartnerQueue(role) && <TabBtn active={tab === 'partnerApps'} onClick={() => setTab('partnerApps')} icon={<Briefcase className="h-4 w-4" />} label="Partners" />}
+          {canAgentQueue(role) && <TabBtn active={tab === 'agentApps'} onClick={() => setTab('agentApps')} icon={<Users className="h-4 w-4" />} label="Agents" />}
+          {canInsuranceQueue(role) && <TabBtn active={tab === 'insuranceApps'} onClick={() => setTab('insuranceApps')} icon={<Shield className="h-4 w-4" />} label="Insurance" />}
+          {fullAdmin && (
+            <>
           <TabBtn active={tab === 'employees'} onClick={() => setTab('employees')} icon={<Shield className="h-4 w-4" />} label="Employees" />
           <TabBtn active={tab === 'templates'} onClick={() => setTab('templates')} icon={<Mail className="h-4 w-4" />} label="Templates" />
           <TabBtn active={tab === 'files'} onClick={() => setTab('files')} icon={<FolderOpen className="h-4 w-4" />} label="Files" />
-        </div>
-        <div className="container-fluid py-6">
-          {tab === 'directors' && <DirectorsTab />}
-          {tab === 'email' && <EmailTab />}
-          {tab === 'partners' && <PartnersTab />}
-          {tab === 'employees' && <EmployeesTab />}
-          {tab === 'templates' && <EmailTemplatesTab />}
-          {tab === 'files' && <FilesTab />}
+            </>
+          )}
         </div>
       </div>
 
-      {/* Main content (desktop) */}
-      <div className="hidden flex-1 lg:flex lg:flex-col">
+      <div className="flex-1">
         <div className="container-fluid py-6">
           {tab === 'directors' && <DirectorsTab />}
+          {tab === 'offers' && <OffersTab />}
           {tab === 'email' && <EmailTab />}
-          {tab === 'partners' && <PartnersTab />}
+          {tab === 'payments' && <PaymentsTab />}
+          {tab === 'inventory' && <InventoryTab />}
+          {tab === 'care' && <CareTab />}
+          {tab === 'careers' && <CareersTab />}
+          {tab === 'partnerApps' && <KycQueueTab queue="partner" />}
+          {tab === 'agentApps' && <KycQueueTab queue="agent" />}
+          {tab === 'insuranceApps' && <KycQueueTab queue="insurance" />}
           {tab === 'employees' && <EmployeesTab />}
           {tab === 'templates' && <EmailTemplatesTab />}
           {tab === 'files' && <FilesTab />}
@@ -256,7 +331,115 @@ function DirectorsTab() {
   );
 }
 
+function OffersTab() {
+  const [offers, setOffers] = useState<YltOffer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [editing, setEditing] = useState<YltOffer | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setOffers(await fetchOffers(true));
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function save() {
+    if (!editing) return;
+    if (!editing.promo_code.trim() || !editing.title.trim()) { setError('Code and title are required.'); return; }
+    setSaving(true); setError(null);
+    const { error: e, emails_sent } = await saveOffer(editing);
+    setSaving(false);
+    if (e) { setError(e); return; }
+    setSuccess(emails_sent ? `Offer saved. Emailed ${emails_sent} subscriber(s).` : 'Offer saved.');
+    setEditing(null);
+    await load();
+  }
+
+  async function remove(id: string) {
+    const { error: e } = await deleteOffer(id);
+    if (e) { setError(e); return; }
+    await load();
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between">
+        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>Homepage and Offers page load these rows from the MySQL offers table.</p>
+        <button onClick={() => setEditing({ id: crypto.randomUUID(), promo_code: '', title: '', description: '', discount_value: '', expiry_date: '2026-12-31', is_active: true, tag: 'Bus', tone: 'from-navy-800 to-navy-600' })} className="btn-primary text-xs"><Plus className="h-4 w-4" /> Add offer</button>
+      </div>
+      {error && <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500"><AlertCircle className="h-4 w-4" /> {error}</div>}
+      {success && <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600"><Check className="h-4 w-4" /> {success}</div>}
+      <div className="mt-6">
+        {loading ? (
+          <div className="surface p-8 text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin" style={{ color: 'var(--text-muted)' }} /></div>
+        ) : (
+          <div className="overflow-x-auto surface p-4">
+            <table className="w-full text-sm">
+              <thead><tr className="border-b text-left text-xs uppercase" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                <th className="pb-3 pr-4 font-medium">Code</th><th className="pb-3 pr-4 font-medium">Title</th>
+                <th className="pb-3 pr-4 font-medium">Tag</th><th className="pb-3 pr-4 font-medium">Active</th><th className="pb-3 font-medium"></th>
+              </tr></thead>
+              <tbody>
+                {offers.map((o) => (
+                  <tr key={o.id} className="border-b" style={{ borderColor: 'var(--border)' }}>
+                    <td className="py-3 pr-4 font-mono" style={{ color: 'var(--text-primary)' }}>{o.promo_code}</td>
+                    <td className="py-3 pr-4" style={{ color: 'var(--text-secondary)' }}>{o.title}</td>
+                    <td className="py-3 pr-4">{o.tag}</td>
+                    <td className="py-3 pr-4">{o.is_active ? 'Yes' : 'No'}</td>
+                    <td className="py-3">
+                      <div className="flex gap-1.5">
+                        <button onClick={() => { setEditing(o); setError(null); setSuccess(null); }} className="rounded-lg p-1.5" style={{ color: 'var(--text-muted)' }}><Pencil className="h-4 w-4" /></button>
+                        <button onClick={() => remove(o.id)} className="rounded-lg p-1.5 text-red-500"><Trash2 className="h-4 w-4" /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {editing && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
+          <div className="surface max-w-lg w-full p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-display font-bold">Offer</h3>
+              <button onClick={() => setEditing(null)}><X className="h-4 w-4" /></button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block"><span className="label-text">Promo code</span><input className="input-field mt-1.5" value={editing.promo_code} onChange={(e) => setEditing({ ...editing, promo_code: e.target.value.toUpperCase() })} /></label>
+              <label className="block"><span className="label-text">Tag</span>
+                <select className="input-field mt-1.5" value={editing.tag} onChange={(e) => setEditing({ ...editing, tag: e.target.value })}>
+                  <option>Bus</option><option>Hotel</option><option>Car</option><option>Women</option><option>Pay</option>
+                </select>
+              </label>
+              <label className="block sm:col-span-2"><span className="label-text">Title</span><input className="input-field mt-1.5" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} /></label>
+              <label className="block sm:col-span-2"><span className="label-text">Description</span><textarea className="input-field mt-1.5" rows={2} value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></label>
+              <label className="block"><span className="label-text">Discount</span><input className="input-field mt-1.5" value={editing.discount_value} onChange={(e) => setEditing({ ...editing, discount_value: e.target.value })} /></label>
+              <label className="block"><span className="label-text">Expiry</span><input type="date" className="input-field mt-1.5" value={editing.expiry_date} onChange={(e) => setEditing({ ...editing, expiry_date: e.target.value })} /></label>
+              <label className="flex items-center gap-2 sm:col-span-2 text-sm"><input type="checkbox" checked={editing.is_active} onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} /> Active on homepage</label>
+            </div>
+            <button onClick={save} disabled={saving} className="btn-primary mt-4 w-full disabled:opacity-40">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save offer
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ---------------- Email & OTP tab ----------------
+
+function defaultSmtp(): SmtpSettings {
+  return {
+    smtp_host: 'smtp.hostinger.com', smtp_port: 465, smtp_user: '', smtp_password: '',
+    smtp_from_email: 'noreply@ylttravels.com', smtp_from_name: 'YLT Travels', smtp_secure: true, email_enabled: false,
+  };
+}
 
 function EmailTab() {
   const [settings, setSettings] = useState<SmtpSettings | null>(null);
@@ -270,10 +453,13 @@ function EmailTab() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/app-settings.php`);
+      const res = await apiFetch('/api/settings');
       const data = await res.json();
-      setSettings(data);
-    } catch { setError('Could not load settings.'); }
+      setSettings({ ...defaultSmtp(), ...data });
+    } catch {
+      setSettings(defaultSmtp());
+      setError('Loaded local defaults. Save to persist on this machine.');
+    }
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
@@ -282,30 +468,30 @@ function EmailTab() {
     if (!settings) return;
     setSaving(true); setError(null); setSuccess(null);
     try {
-      const res = await fetch(`${API}/app-settings.php`, {
+      const res = await apiFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
       });
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error ?? 'Save failed.'); }
-      else { setSuccess('Email settings saved.'); setSettings(data); }
-    } catch { setError('Network error.'); }
+      else { setSuccess('Email settings saved on this server.'); setSettings({ ...settings, ...data }); }
+    } catch { setError('Could not save. Is the Vite server running?'); }
     setSaving(false);
   }
 
   async function sendTest() {
     setTesting(true); setError(null); setSuccess(null);
     try {
-      const res = await fetch(`${API}/auth.php`, {
+      const res = await apiFetch('/api/admin/test-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test_smtp', to: testEmail || settings?.smtp_user || '' }),
+        body: JSON.stringify({ to: testEmail || settings?.smtp_user || '' }),
       });
       const data = await res.json();
-      if (!res.ok || data.error) { setError(data.error ?? 'Test failed.'); }
+      if (!res.ok || data.error || data.ok === false) { setError(data.error ?? data.message ?? 'Test email needs SMTP. Settings are still saved locally.'); }
       else { setSuccess('Test email sent. Check your inbox.'); }
-    } catch { setError('Network error.'); }
+    } catch { setError('Test send needs the production mail API. Settings themselves are saved locally.'); }
     setTesting(false);
   }
 
@@ -371,126 +557,479 @@ function EmailTab() {
   );
 }
 
-interface Partner {
-  id: string; email: string; name: string; agency_name: string | null;
-  phone: string | null; city: string | null; status: string; commission_rate: number; created_at: string;
-}
-
-function PartnersTab() {
-  const [partners, setPartners] = useState<Partner[]>([]);
+function PaymentsTab() {
+  const [s, setS] = useState<PaymentSettings>({
+    payment_provider: 'razorpay', payments_enabled: true, razorpay_key_id: '', razorpay_secret: '',
+  });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [draft, setDraft] = useState({ email: '', password: '', name: '', agency_name: '', phone: '', city: '', commission_rate: 0.08 });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  async function load() {
-    setLoading(true); setError(null);
-    try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'partners_list' }) });
-      const data = await res.json();
-      if (!res.ok || data.error) { setError(data.error ?? 'Load failed.'); }
-      else { setPartners(data.partners ?? []); }
-    } catch { setError('Network error.'); }
-    setLoading(false);
-  }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    apiFetch('/api/settings')
+      .then((r) => r.json())
+      .then((data) => setS({
+        payment_provider: data.payment_provider ?? 'razorpay',
+        payments_enabled: data.payments_enabled ?? true,
+        razorpay_key_id: data.razorpay_key_id ?? '',
+        razorpay_secret: '',
+        razorpay_secret_set: data.razorpay_secret_set,
+      }))
+      .catch(() => setError('Could not load payment settings.'))
+      .finally(() => setLoading(false));
+  }, []);
 
-  async function create() {
-    if (!draft.email || !draft.password || !draft.name) { setError('Email, password, and name are required.'); return; }
-    setSaving(true); setError(null);
+  async function save() {
+    setSaving(true); setError(null); setSuccess(null);
     try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'partner_create', ...draft }) });
+      const res = await apiFetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payment_provider: s.payment_provider,
+          payments_enabled: s.payments_enabled,
+          razorpay_key_id: s.razorpay_key_id,
+          razorpay_secret: s.razorpay_secret || undefined,
+        }),
+      });
       const data = await res.json();
-      if (!res.ok || data.error) { setError(data.error ?? 'Create failed.'); }
-      else { setShowAdd(false); setDraft({ email: '', password: '', name: '', agency_name: '', phone: '', city: '', commission_rate: 0.08 }); load(); }
-    } catch { setError('Network error.'); }
+      if (!res.ok) setError(data.message ?? 'Save failed.');
+      else {
+        setSuccess('Payment settings saved. Secret stays on the server, never in the browser.');
+        setS((prev) => ({ ...prev, razorpay_secret: '', razorpay_secret_set: data.razorpay_secret_set }));
+      }
+    } catch { setError('Could not save.'); }
     setSaving(false);
-  }
-
-  async function remove(id: string) {
-    if (!confirm('Delete this agent partner?')) return;
-    try {
-      await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'partner_delete', id }) });
-      load();
-    } catch { setError('Network error.'); }
-  }
-
-  async function toggleStatus(p: Partner) {
-    const next = p.status === 'active' ? 'suspended' : 'active';
-    try {
-      await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'partner_update', id: p.id, status: next }) });
-      load();
-    } catch { setError('Network error.'); }
   }
 
   if (loading) return <div className="surface p-8 text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin" style={{ color: 'var(--text-muted)' }} /></div>;
 
   return (
-    <div className="space-y-6">
-      <div className="surface p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="flex items-center gap-2 font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}><Briefcase className="h-5 w-5 text-crimson-600" /> Agent Partners</h3>
-            <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>Create and manage agents who can log into the Operator ERP portal.</p>
-          </div>
-          <button onClick={() => setShowAdd(true)} className="btn-primary text-xs"><Plus className="h-4 w-4" /> Add Partner</button>
-        </div>
-        {error && <div className="mt-4 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500"><AlertCircle className="h-4 w-4" /> {error}</div>}
-        <div className="mt-5 overflow-x-auto">
-          {partners.length === 0 ? (
-            <p className="py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>No partners yet. Click "Add Partner" to create one.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead><tr className="border-b text-left text-xs uppercase" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-                <th className="pb-3 pr-4 font-medium">Name</th><th className="pb-3 pr-4 font-medium">Email</th>
-                <th className="pb-3 pr-4 font-medium">Agency</th><th className="pb-3 pr-4 font-medium">City</th>
-                <th className="pb-3 pr-4 font-medium">Comm.</th><th className="pb-3 pr-4 font-medium">Status</th><th className="pb-3 font-medium"></th>
-              </tr></thead>
-              <tbody>
-                {partners.map((p) => (
-                  <tr key={p.id} className="border-b" style={{ borderColor: 'var(--border)' }}>
-                    <td className="py-3 pr-4" style={{ color: 'var(--text-primary)' }}>{p.name}</td>
-                    <td className="py-3 pr-4" style={{ color: 'var(--text-secondary)' }}>{p.email}</td>
-                    <td className="py-3 pr-4" style={{ color: 'var(--text-secondary)' }}>{p.agency_name ?? '—'}</td>
-                    <td className="py-3 pr-4" style={{ color: 'var(--text-secondary)' }}>{p.city ?? '—'}</td>
-                    <td className="py-3 pr-4" style={{ color: 'var(--text-secondary)' }}>{(p.commission_rate * 100).toFixed(0)}%</td>
-                    <td className="py-3 pr-4"><span className={`rounded-full px-2 py-0.5 text-xs ${p.status === 'active' ? 'bg-emerald-500/15 text-emerald-600' : 'bg-amber-500/15 text-amber-600'}`}>{p.status}</span></td>
-                    <td className="py-3">
-                      <div className="flex gap-1.5">
-                        <button onClick={() => toggleStatus(p)} className="rounded-lg p-1.5 transition hover:bg-[var(--bg-raised)]" title={p.status === 'active' ? 'Suspend' : 'Activate'} style={{ color: 'var(--text-muted)' }}><Shield className="h-4 w-4" /></button>
-                        <button onClick={() => remove(p.id)} className="rounded-lg p-1.5 text-red-500 transition hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
+    <div className="surface max-w-2xl p-6">
+      <h3 className="flex items-center gap-2 font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+        <CreditCard className="h-5 w-5 text-crimson-600" /> Payments
+      </h3>
+      <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+        Razorpay Key ID is public. The secret is stored only on the server. Restart is not required after save.
+      </p>
+      <label className="mt-5 flex items-center gap-2 text-sm" style={{ color: 'var(--text-primary)' }}>
+        <input type="checkbox" checked={s.payments_enabled} onChange={(e) => setS({ ...s, payments_enabled: e.target.checked })} className="h-4 w-4 accent-crimson-500" />
+        Enable online payments
+      </label>
+      <label className="mt-4 block"><span className="label-text">Provider</span>
+        <select className="input-field mt-1.5" value={s.payment_provider} onChange={(e) => setS({ ...s, payment_provider: e.target.value as PaymentSettings['payment_provider'] })}>
+          <option value="razorpay">Razorpay</option>
+          <option value="stripe">Stripe (coming)</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <label className="mt-3 block"><span className="label-text">Razorpay Key ID</span>
+        <input className="input-field mt-1.5 font-mono text-sm" value={s.razorpay_key_id} onChange={(e) => setS({ ...s, razorpay_key_id: e.target.value })} placeholder="rzp_test_..." />
+      </label>
+      <label className="mt-3 block"><span className="label-text">Razorpay Secret</span>
+        <input type="password" className="input-field mt-1.5 font-mono text-sm" value={s.razorpay_secret} onChange={(e) => setS({ ...s, razorpay_secret: e.target.value })} placeholder={s.razorpay_secret_set ? 'Leave blank to keep current secret' : 'Enter secret'} />
+      </label>
+      {error && <div className="mt-4 text-sm text-red-500">{error}</div>}
+      {success && <div className="mt-4 text-sm text-emerald-600">{success}</div>}
+      <button onClick={save} disabled={saving} className="btn-primary mt-5 text-xs disabled:opacity-40">
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save payment settings
+      </button>
+    </div>
+  );
+}
 
-      {showAdd && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setShowAdd(false)}>
-          <div className="w-full max-w-lg rounded-2xl border bg-[var(--bg-surface)] p-6" style={{ borderColor: 'var(--border)' }} onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Add Agent Partner</h3>
-              <button onClick={() => setShowAdd(false)} style={{ color: 'var(--text-muted)' }}><X className="h-5 w-5" /></button>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <label className="block"><span className="label-text">Name *</span><input className="input-field mt-1.5 text-sm" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Ramesh Kumar" /></label>
-              <label className="block"><span className="label-text">Email *</span><input type="email" className="input-field mt-1.5 text-sm" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="agent@ylttravels.com" /></label>
-              <label className="block"><span className="label-text">Password *</span><input type="password" className="input-field mt-1.5 text-sm" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} placeholder="Min 6 characters" /></label>
-              <label className="block"><span className="label-text">Agency Name</span><input className="input-field mt-1.5 text-sm" value={draft.agency_name} onChange={(e) => setDraft({ ...draft, agency_name: e.target.value })} placeholder="YLT Travels" /></label>
-              <label className="block"><span className="label-text">Phone</span><input className="input-field mt-1.5 text-sm" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="9876543210" /></label>
-              <label className="block"><span className="label-text">City</span><input className="input-field mt-1.5 text-sm" value={draft.city} onChange={(e) => setDraft({ ...draft, city: e.target.value })} placeholder="Hyderabad" /></label>
-              <label className="block"><span className="label-text">Commission Rate</span><input type="number" step="0.01" className="input-field mt-1.5 text-sm" value={draft.commission_rate} onChange={(e) => setDraft({ ...draft, commission_rate: +e.target.value })} placeholder="0.08" /></label>
-            </div>
-            {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
-            <button onClick={create} disabled={saving} className="btn-primary mt-5 w-full text-sm disabled:opacity-40">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create Partner</button>
+function InventoryTab() {
+  const [s, setS] = useState({ inventory_provider: 'ylt_db' });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch('/api/settings')
+      .then((r) => r.json())
+      .then((data) => setS({
+        inventory_provider: data.inventory_provider || 'ylt_db',
+      }))
+      .catch(() => setError('Could not load inventory settings.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function save() {
+    setSaving(true); setError(null); setSuccess(null);
+    try {
+      const res = await apiFetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inventory_provider: 'ylt_db' }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) setError(data.error ?? 'Save failed.');
+      else setSuccess('Inventory stays on YLT MySQL.');
+    } catch { setError('Could not save inventory settings.'); }
+    setSaving(false);
+  }
+
+  if (loading) return <div className="surface p-8 text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin" style={{ color: 'var(--text-muted)' }} /></div>;
+
+  return (
+    <div className="surface max-w-2xl p-6">
+      <h3 className="flex items-center gap-2 font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+        <Boxes className="h-5 w-5 text-crimson-600" /> Seat inventory
+      </h3>
+      <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+        Live inventory is YLT MySQL (`inventory_provider = ylt_db`). External CRS is not wired.
+      </p>
+      <label className="mt-5 block"><span className="label-text">Provider</span>
+        <select className="input-field mt-1.5" value={s.inventory_provider} disabled>
+          <option value="ylt_db">YLT database (live)</option>
+        </select>
+      </label>
+      {error && <div className="mt-4 text-sm text-red-500">{error}</div>}
+      {success && <div className="mt-4 text-sm text-emerald-600">{success}</div>}
+      <button onClick={save} disabled={saving} className="btn-primary mt-5 text-xs disabled:opacity-40">
+        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Confirm YLT inventory
+      </button>
+    </div>
+  );
+}
+
+function CareTab() {
+  const [articles, setArticles] = useState<{ id: string; slug: string; category: string; title: string; summary: string; body: string }[]>([]);
+  const [a, setA] = useState({ title: '', category: 'Booking', summary: '', body: '', slug: '' });
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function load() {
+    const h = await apiFetch('/api/ops.php?resource=help').then((r) => r.json()).catch(() => ({}));
+    setArticles(Array.isArray(h.articles) ? h.articles : []);
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function saveArticle() {
+    if (!a.title.trim()) return;
+    await apiFetch('/api/ops.php?resource=help', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a) });
+    setA({ title: '', category: 'Booking', summary: '', body: '', slug: '' });
+    setMsg('Article saved to YLT Care.');
+    await load();
+  }
+
+  return (
+    <div className="surface max-w-2xl p-6">
+      <h3 className="font-display text-lg font-bold">YLT Care articles</h3>
+      <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Public Help loads traveller topics. ERP/Admin/Platform articles stay off the public Help home.</p>
+      {msg && <p className="mt-2 text-sm text-emerald-700">{msg}</p>}
+      <div className="mt-4 space-y-2">
+        <input className="input-field text-sm" placeholder="Title" value={a.title} onChange={(e) => setA({ ...a, title: e.target.value })} />
+        <input className="input-field text-sm" placeholder="Category" value={a.category} onChange={(e) => setA({ ...a, category: e.target.value })} />
+        <input className="input-field text-sm" placeholder="Summary" value={a.summary} onChange={(e) => setA({ ...a, summary: e.target.value })} />
+        <textarea className="input-field min-h-[80px] text-sm" placeholder="Body" value={a.body} onChange={(e) => setA({ ...a, body: e.target.value })} />
+        <button className="btn-primary text-xs" onClick={() => void saveArticle()}>Publish article</button>
+      </div>
+      <ul className="mt-4 space-y-1 text-sm">
+        {articles.map((row) => <li key={row.id}>{row.category} · {row.title}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+type AdminJob = {
+  id: string; title: string; location: string; department: string; employment_type: string;
+  description: string; requirements?: string; status: string;
+};
+type AdminApp = {
+  id: string; job_id: string; name: string; email: string; phone?: string; cover_note?: string; created_at?: string;
+  job_title?: string; resume_path?: string; resume_filename?: string; id_proof_path?: string; id_proof_filename?: string;
+};
+
+function careersFileKind(name?: string): 'pdf' | 'image' | 'word' | 'other' {
+  const n = String(name || '').toLowerCase();
+  if (/\.pdf$/.test(n)) return 'pdf';
+  if (/\.(jpe?g|png|webp)$/.test(n)) return 'image';
+  if (/\.docx?$/.test(n)) return 'word';
+  return 'other';
+}
+
+async function downloadCareersFile(appId: string, kind: 'resume' | 'id_proof', filename: string) {
+  const res = await apiFetch(`/api/ops.php?resource=application-file&id=${encodeURIComponent(appId)}&kind=${kind}&download=1`);
+  if (!res.ok) return;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || kind;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function CareersFilePreview({ appId, kind, filename, stored, label }: { appId: string; kind: 'resume' | 'id_proof'; filename?: string; stored?: string; label: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [type, setType] = useState<'pdf' | 'image' | 'word' | 'other'>(careersFileKind(filename || stored));
+  const hasFile = Boolean(filename || stored);
+
+  useEffect(() => {
+    let alive = true;
+    let objectUrl = '';
+    if (!hasFile) return;
+    setErr(null);
+    setUrl(null);
+    setType(careersFileKind(filename || stored));
+    (async () => {
+      const res = await apiFetch(`/api/ops.php?resource=application-file&id=${encodeURIComponent(appId)}&kind=${kind}`);
+      if (!alive) return;
+      if (!res.ok) {
+        setErr('Could not load file.');
+        return;
+      }
+      const blob = await res.blob();
+      if (!alive) return;
+      const mime = blob.type || '';
+      if (mime.includes('pdf')) setType('pdf');
+      else if (mime.startsWith('image/')) setType('image');
+      else if (mime.includes('word') || mime.includes('msword') || mime.includes('officedocument')) setType('word');
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    })().catch(() => { if (alive) setErr('Could not load file.'); });
+    return () => {
+      alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [appId, kind, filename, stored, hasFile]);
+
+  return (
+    <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border)' }}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold">{label}</p>
+        {hasFile && (
+          <button type="button" className="btn-ghost text-xs" onClick={() => void downloadCareersFile(appId, kind, filename || kind)}>
+            <Download className="h-3.5 w-3.5" /> Download
+          </button>
+        )}
+      </div>
+      <p className="mb-2 truncate text-[11px]" style={{ color: 'var(--text-muted)' }}>{filename || (hasFile ? kind : 'No file uploaded.')}</p>
+      {!hasFile && <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No file uploaded.</p>}
+      {err && <p className="text-sm text-red-600">{err}</p>}
+      {hasFile && type === 'word' && (
+        <p className="rounded-lg border px-3 py-4 text-sm" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
+          Preview not available in browser for Word documents. Use Download to open the file.
+        </p>
+      )}
+      {hasFile && type === 'image' && url && (
+        <img src={url} alt={label} className="max-h-80 w-full rounded-lg object-contain" />
+      )}
+      {hasFile && type === 'pdf' && url && (
+        <object data={url} type="application/pdf" className="h-80 w-full rounded-lg border" style={{ borderColor: 'var(--border)' }}>
+          <iframe title={label} src={url} className="h-80 w-full rounded-lg border-0" />
+        </object>
+      )}
+      {hasFile && type === 'other' && url && (
+        <p className="rounded-lg border px-3 py-4 text-sm" style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)' }}>
+          Preview not available in browser. Use Download to open the file.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CareersTab() {
+  const { user } = useAuth();
+  const role = (user?.role || 'admin').toLowerCase();
+  const canPost = role === 'admin' || role === '';
+  const canViewApps = canPost || role === 'hr';
+  const [jobs, setJobs] = useState<AdminJob[]>([]);
+  const [apps, setApps] = useState<AdminApp[]>([]);
+  const [jobId, setJobId] = useState('');
+  const [openApp, setOpenApp] = useState<AdminApp | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [job, setJob] = useState({ title: '', location: '', department: 'Operations', employment_type: 'Full-time', description: '', requirements: '', status: 'open' });
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function loadJobs() {
+    const j = await apiFetch('/api/ops.php?resource=jobs&mine=1').then((r) => r.json()).catch(() => ({}));
+    const rows: AdminJob[] = Array.isArray(j.jobs) ? j.jobs : [];
+    setJobs(rows);
+    setJobId((cur) => cur && rows.some((r) => r.id === cur) ? cur : (rows[0]?.id || ''));
+  }
+  async function loadApps(id: string) {
+    if (!id || !canViewApps) { setApps([]); return; }
+    const a = await apiFetch(`/api/ops.php?resource=applications&job_id=${encodeURIComponent(id)}`).then((r) => r.json()).catch(() => ({}));
+    setApps(Array.isArray(a.applications) ? a.applications : []);
+  }
+  useEffect(() => { void loadJobs(); }, []);
+  useEffect(() => { setOpenApp(null); void loadApps(jobId); }, [jobId]);
+
+  async function saveJob() {
+    if (!canPost) return;
+    if (!job.title.trim()) { setErr('Title required.'); return; }
+    setErr(null);
+    const body = editing ? { ...job, id: editing } : job;
+    const res = await apiFetch('/api/ops.php?resource=jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) { setErr(data.error || 'Could not save job.'); return; }
+    setJob({ title: '', location: '', department: 'Operations', employment_type: 'Full-time', description: '', requirements: '', status: 'open' });
+    setEditing(null);
+    setMsg(editing ? 'Job updated.' : 'Job posted to public /careers.');
+    await loadJobs();
+  }
+  function editJob(row: AdminJob) {
+    setEditing(row.id);
+    setJob({
+      title: row.title || '',
+      location: row.location || '',
+      department: row.department || 'Operations',
+      employment_type: row.employment_type || 'Full-time',
+      description: row.description || '',
+      requirements: row.requirements || '',
+      status: row.status || 'open',
+    });
+    setJobId(row.id);
+  }
+  async function closeJob(id: string) {
+    const row = jobs.find((j) => j.id === id);
+    if (!row || !canPost) return;
+    await apiFetch('/api/ops.php?resource=jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...row, id, status: 'closed' }) });
+    await loadJobs();
+  }
+
+  const selected = jobs.find((j) => j.id === jobId);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-display text-2xl font-bold">YLT Travels careers</h2>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Company roles only. Partners cannot post here. Public site lists open jobs at /careers.</p>
+      </div>
+      {msg && <p className="text-sm text-emerald-700">{msg}</p>}
+      {err && <p className="text-sm text-red-600">{err}</p>}
+
+      {canPost && (
+        <div className="surface max-w-3xl p-6">
+          <h3 className="font-display text-lg font-bold">{editing ? 'Edit job' : 'Post a job'}</h3>
+          <div className="mt-4 grid gap-2 md:grid-cols-2">
+            <input className="input-field text-sm" placeholder="Job title" value={job.title} onChange={(e) => setJob({ ...job, title: e.target.value })} />
+            <input className="input-field text-sm" placeholder="Department" value={job.department} onChange={(e) => setJob({ ...job, department: e.target.value })} />
+            <input className="input-field text-sm" placeholder="Location" value={job.location} onChange={(e) => setJob({ ...job, location: e.target.value })} />
+            <select className="input-field text-sm" value={job.employment_type} onChange={(e) => setJob({ ...job, employment_type: e.target.value })}>
+              <option>Full-time</option><option>Part-time</option><option>Contract</option><option>Internship</option>
+            </select>
+            <select className="input-field text-sm" value={job.status} onChange={(e) => setJob({ ...job, status: e.target.value })}>
+              <option value="open">Open (public)</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+          <textarea className="input-field mt-2 min-h-[80px] text-sm" placeholder="Description" value={job.description} onChange={(e) => setJob({ ...job, description: e.target.value })} />
+          <textarea className="input-field mt-2 min-h-[72px] text-sm" placeholder="Requirements" value={job.requirements} onChange={(e) => setJob({ ...job, requirements: e.target.value })} />
+          <div className="mt-3 flex gap-2">
+            <button className="btn-primary text-xs" onClick={() => void saveJob()}>{editing ? 'Save changes' : 'Post job'}</button>
+            {editing && <button className="btn-ghost text-xs" onClick={() => { setEditing(null); setJob({ title: '', location: '', department: 'Operations', employment_type: 'Full-time', description: '', requirements: '', status: 'open' }); }}>Cancel</button>}
           </div>
         </div>
       )}
+      {!canPost && (
+        <p className="rounded-xl border px-4 py-3 text-sm" style={{ borderColor: 'var(--border)' }}>HR can review applications below. Only Admin can post or close YLT Travels jobs.</p>
+      )}
+
+      <div className="surface p-6">
+        <h3 className="font-display text-lg font-bold">Published jobs</h3>
+        <ul className="mt-3 space-y-2">
+          {jobs.map((row) => (
+            <li key={row.id} className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm ${jobId === row.id ? 'border-crimson-400' : ''}`} style={{ borderColor: 'var(--border)' }}>
+              <button type="button" className="text-left" onClick={() => setJobId(row.id)}>
+                <span className="font-semibold">{row.title}</span>
+                <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>{row.department} · {row.location || '—'} · {row.status}</span>
+              </button>
+              {canPost && (
+                <span className="flex gap-2">
+                  <button className="text-xs font-semibold text-crimson-700" onClick={() => editJob(row)}>Edit</button>
+                  {row.status === 'open' && <button className="text-xs font-semibold" onClick={() => void closeJob(row.id)}>Close</button>}
+                </span>
+              )}
+            </li>
+          ))}
+          {!jobs.length && <li className="text-sm" style={{ color: 'var(--text-muted)' }}>No YLT jobs yet.</li>}
+        </ul>
+      </div>
+
+      {canViewApps && (
+        <div className="surface p-6">
+          <h3 className="font-display text-lg font-bold">Applications{selected ? ` · ${selected.title}` : ''}</h3>
+          <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Responses for this job only (job_id). Select a role above. Click a candidate to preview files.</p>
+          {!selected && <p className="mt-3 text-sm" style={{ color: 'var(--text-muted)' }}>Select a job to see candidates.</p>}
+          {selected && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs uppercase" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                    <th className="py-2 pr-3">Name</th>
+                    <th className="py-2 pr-3">Email</th>
+                    <th className="py-2 pr-3">Phone</th>
+                    <th className="py-2 pr-3">Cover / resume</th>
+                    <th className="py-2">Submitted</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apps.map((a) => (
+                    <tr
+                      key={a.id}
+                      role="button"
+                      tabIndex={0}
+                      className="cursor-pointer border-b align-top hover:bg-emerald-50/60"
+                      style={{ borderColor: 'var(--border)' }}
+                      onClick={() => setOpenApp(a)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenApp(a); } }}
+                    >
+                      <td className="py-2 pr-3 font-semibold">{a.name}</td>
+                      <td className="py-2 pr-3">{a.email}</td>
+                      <td className="py-2 pr-3">{a.phone || '—'}</td>
+                      <td className="py-2 pr-3 whitespace-pre-wrap">{a.cover_note || '—'}</td>
+                      <td className="py-2 text-xs">{a.created_at ? new Date(a.created_at).toLocaleString('en-IN') : '—'}</td>
+                    </tr>
+                  ))}
+                  {!apps.length && <tr><td colSpan={5} className="py-6" style={{ color: 'var(--text-muted)' }}>No applications for this job yet.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      <Drawer open={!!openApp} onClose={() => setOpenApp(null)} title={openApp ? openApp.name : 'Application'} wide>
+        {openApp && (
+          <div className="space-y-4">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-crimson-700">YLT Travels · HR</p>
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>Name</dt>
+                <dd className="font-semibold">{openApp.name}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>Job title</dt>
+                <dd>{openApp.job_title || selected?.title || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>Email</dt>
+                <dd>{openApp.email}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>Phone</dt>
+                <dd>{openApp.phone || '—'}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>Submitted at</dt>
+                <dd>{openApp.created_at ? new Date(openApp.created_at).toLocaleString('en-IN') : '—'}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>Cover note</dt>
+                <dd className="whitespace-pre-wrap">{openApp.cover_note || '—'}</dd>
+              </div>
+            </dl>
+            <CareersFilePreview appId={openApp.id} kind="resume" filename={openApp.resume_filename} stored={openApp.resume_path} label="Resume" />
+            <CareersFilePreview appId={openApp.id} kind="id_proof" filename={openApp.id_proof_filename} stored={openApp.id_proof_path} label="ID proof" />
+          </div>
+        )}
+      </Drawer>
     </div>
   );
 }
@@ -526,7 +1065,7 @@ function EmployeesTab() {
   async function load() {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'employees_list' }) });
+      const res = await apiFetch('/api/auth/employees');
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error ?? 'Load failed.'); }
       else { setEmployees(data.employees ?? []); }
@@ -545,7 +1084,7 @@ function EmployeesTab() {
     if (!draft.email || !draft.password || !draft.name) { setError('Email, password, and name are required.'); return; }
     setSaving(true); setError(null);
     try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'employee_create', ...draft }) });
+      const res = await apiFetch('/api/auth/employees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) });
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error ?? 'Create failed.'); }
       else { setShowAdd(false); setDraft({ email: '', password: '', name: '', role: 'operator', phone: '' }); load(); }
@@ -556,7 +1095,7 @@ function EmployeesTab() {
   async function remove(id: string) {
     if (!confirm('Delete this employee?')) return;
     try {
-      await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'employee_delete', id }) });
+      await apiFetch(`/api/auth/employees/${id}`, { method: 'DELETE' });
       load();
     } catch { setError('Network error.'); }
   }
@@ -571,7 +1110,7 @@ function EmployeesTab() {
     if (!resetEmp || !resetPass) return;
     setResetSaving(true);
     try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'employee_reset_password', id: resetEmp.id, password: resetPass }) });
+      const res = await apiFetch(`/api/auth/employees/${resetEmp.id}/reset-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: resetPass }) });
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error ?? 'Reset failed.'); }
       else { setResetEmp(null); }
@@ -625,8 +1164,8 @@ function EmployeesTab() {
       </div>
 
       {showAdd && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setShowAdd(false)}>
-          <div className="w-full max-w-lg rounded-2xl border bg-[var(--bg-surface)] p-6" style={{ borderColor: 'var(--border)' }} onClick={(e) => e.stopPropagation()}>
+        <div className="erp-overlay-enter erp-backdrop fixed inset-0 z-50 grid place-items-center p-4" onClick={() => setShowAdd(false)}>
+          <div className="erp-modal-enter erp-modal-card w-full max-w-lg rounded-2xl border bg-[var(--bg-surface)] p-6" style={{ borderColor: 'var(--border)' }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Add Employee</h3>
               <button onClick={() => setShowAdd(false)} style={{ color: 'var(--text-muted)' }}><X className="h-5 w-5" /></button>
@@ -646,11 +1185,15 @@ function EmployeesTab() {
               <label className="block"><span className="label-text">Role</span>
                 <select className="input-field mt-1.5 text-sm" value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value })}>
                   <option value="admin">Admin</option>
+                  <option value="hr">HR</option>
                   <option value="sales">Sales</option>
                   <option value="support">Support</option>
                   <option value="marketing">Marketing</option>
                   <option value="operator">Operator</option>
                   <option value="manager">Manager</option>
+                  <option value="onboard">Onboard (both queues)</option>
+                  <option value="partner_onboard">Partner onboard</option>
+                  <option value="agent_onboard">Agent onboard</option>
                 </select>
               </label>
               <label className="block"><span className="label-text">Phone</span><input className="input-field mt-1.5 text-sm" value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="9876543210" /></label>
@@ -662,8 +1205,8 @@ function EmployeesTab() {
       )}
 
       {resetEmp && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setResetEmp(null)}>
-          <div className="w-full max-w-md rounded-2xl border bg-[var(--bg-surface)] p-6" style={{ borderColor: 'var(--border)' }} onClick={(e) => e.stopPropagation()}>
+        <div className="erp-overlay-enter erp-backdrop fixed inset-0 z-50 grid place-items-center p-4" onClick={() => setResetEmp(null)}>
+          <div className="erp-modal-enter erp-modal-card w-full max-w-md rounded-2xl border bg-[var(--bg-surface)] p-6" style={{ borderColor: 'var(--border)' }} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Reset Password</h3>
               <button onClick={() => setResetEmp(null)} style={{ color: 'var(--text-muted)' }}><X className="h-5 w-5" /></button>
@@ -704,21 +1247,33 @@ function EmailTemplatesTab() {
   async function load() {
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API}/email-templates.php`);
-      const rows = await res.json();
+      const res = await apiFetch('/api/templates.php');
+      const text = await res.text();
+      let rows: any = {};
+      try { rows = JSON.parse(text); } catch { setError('Templates API did not return JSON. Re-upload api/templates.php.'); setTemplates([]); setLoading(false); return; }
       if (!res.ok || rows.error) { setError(rows.error ?? 'Load failed.'); setTemplates([]); }
       else if (Array.isArray(rows)) {
-        setTemplates(rows.map((r: any) => ({
+        setTemplates(rows.map((r: any) => {
+          let vars: string[] = [];
+          try {
+            vars = Array.isArray(r.available_variables) ? r.available_variables : JSON.parse(r.available_variables || '[]');
+          } catch { vars = []; }
+          if (r.key === 'booking_confirmation') {
+            for (const extra of ['apple_wallet_url', 'google_wallet_url']) {
+              if (!vars.includes(extra)) vars.push(extra);
+            }
+          }
+          return {
           id: r.id,
           key: r.key,
           name: r.name,
           description: r.description ?? '',
           subject: r.subject,
           body_html: r.body_html,
-          available_variables: Array.isArray(r.available_variables) ? r.available_variables : [],
+          available_variables: vars,
           is_active: !!r.is_active,
           updated_at: r.updated_at,
-        })));
+        };}));
       }
     } catch { setError('Network error.'); setTemplates([]); }
     setLoading(false);
@@ -729,20 +1284,24 @@ function EmailTemplatesTab() {
     if (!editing) return;
     setSaving(true); setError(null);
     try {
-      const res = await fetch(`${API}/email-templates.php`, {
+      const html = editing.body_html || '';
+      const body_b64 = btoa(unescape(encodeURIComponent(html)));
+      const res = await apiFetch('/api/templates.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'update',
           id: editing.id,
+          key: editing.key,
           name: editing.name,
           description: editing.description,
           subject: editing.subject,
-          body_html: editing.body_html,
+          body_b64,
           is_active: editing.is_active,
         }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(text); } catch { setSaving(false); setError('Hostinger blocked the HTML save (not JSON). Re-upload api/templates.php from the new zip.'); return; }
       setSaving(false);
       if (!res.ok || data.error) { setError(data.error ?? 'Save failed.'); return; }
       setEditing(null);
@@ -814,7 +1373,23 @@ function EmailTemplatesTab() {
                   </div>
                 </div>
               )}
-              <label className="block"><span className="label-text">HTML Body</span><textarea rows={14} className="input-field mt-1.5 font-mono text-xs" value={editing.body_html} onChange={(e) => setEditing({ ...editing, body_html: e.target.value })} /></label>
+              <label className="block">
+                <span className="label-text">HTML Body</span>
+                {editing.key === 'booking_confirmation' && (
+                  <button
+                    type="button"
+                    className="ml-2 text-[11px] font-semibold text-navy-700 underline"
+                    onClick={() => {
+                      if (editing.body_html.includes('apple_wallet_url')) return;
+                      const block = `<p style="margin-top:20px"><a href="{{apple_wallet_url}}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;border-radius:10px;padding:12px 16px;font-size:12px;font-weight:700">Add to Apple Wallet</a> <a href="{{google_wallet_url}}" style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;border-radius:10px;padding:12px 16px;font-size:12px;font-weight:700;margin-left:8px">Add to Google Wallet</a></p><p style="color:#6b6b75;font-size:12px">iPhone: open the attached .pkpass. Android: open the attached .ics. PDF is also attached.</p>`;
+                      setEditing({ ...editing, body_html: editing.body_html.replace(/<\/body>\s*<\/html>\s*$/i, `${block}</body></html>`) });
+                    }}
+                  >
+                    Insert Apple + Google Wallet buttons
+                  </button>
+                )}
+                <textarea rows={14} className="input-field mt-1.5 font-mono text-xs" value={editing.body_html} onChange={(e) => setEditing({ ...editing, body_html: e.target.value })} />
+              </label>
               <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
                 <input type="checkbox" checked={editing.is_active} onChange={(e) => setEditing({ ...editing, is_active: e.target.checked })} />
                 Active (inactive templates won't be used for sending)
@@ -859,15 +1434,23 @@ function FilesTab() {
     setLoading(true); setError(null);
     try {
       const [filesRes, foldersRes] = await Promise.all([
-        fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'files_list', folder: activeFolder }) }),
-        fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'files_folders' }) }),
+        apiFetch('/api/v1/employees/files'),
+        apiFetch('/api/v1/employees/files/folders'),
       ]);
       const fData = await filesRes.json();
       const foData = await foldersRes.json();
       if (!filesRes.ok || fData.error) { setError(fData.error ?? 'Load failed.'); }
-      else { setFiles(fData.files ?? []); }
-      if (foldersRes.ok && foData.folders) {
-        setFolders(foData.folders.map((f: any) => ({ folder: f.folder, count: Number(f.count), size: formatSize(Number(f.size)) })));
+      else {
+        const list: EmpFile[] = Array.isArray(fData.files) ? fData.files : Array.isArray(fData) ? fData : [];
+        setFiles(activeFolder ? list.filter((f) => f.folder === activeFolder) : list);
+      }
+      const folderRows = Array.isArray(foData.folders) ? foData.folders : Array.isArray(foData) ? foData : [];
+      if (foldersRes.ok) {
+        setFolders(folderRows.map((f: any) => ({
+          folder: f.folder,
+          count: Number(f.count ?? f.n ?? 0),
+          size: formatSize(Number(f.size ?? 0)),
+        })));
       }
     } catch { setError('Network error.'); }
     setLoading(false);
@@ -891,7 +1474,7 @@ function FilesTab() {
     if (!draft.filename || !draft.file_data) { setError('Choose a file first.'); return; }
     setSaving(true); setError(null);
     try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'file_upload', ...draft, uploaded_by_email: user?.email ?? '', uploaded_by_name: user?.name ?? '' }) });
+      const res = await apiFetch('/api/v1/employees/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...draft, uploaded_by_email: user?.email ?? '', uploaded_by_name: user?.name ?? '' }) });
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error ?? 'Upload failed.'); }
       else { setShowUpload(false); setDraft({ filename: '', mime_type: '', size_bytes: 0, folder: 'General', description: '', file_data: '' }); load(); }
@@ -901,7 +1484,7 @@ function FilesTab() {
 
   async function download(f: EmpFile) {
     try {
-      const res = await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'file_download', id: f.id }) });
+      const res = await apiFetch(`/api/v1/employees/files/${f.id}`);
       const data = await res.json();
       if (!res.ok || data.error) { setError(data.error ?? 'Download failed.'); return; }
       const link = document.createElement('a');
@@ -914,7 +1497,7 @@ function FilesTab() {
   async function remove(id: string) {
     if (!confirm('Delete this file?')) return;
     try {
-      await fetch(`${API}/auth.php`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'file_delete', id }) });
+      await apiFetch(`/api/v1/employees/files/${id}`, { method: 'DELETE' });
       load();
     } catch { setError('Network error.'); }
   }

@@ -1,0 +1,14 @@
+YLT Travels — Hostinger File Manager (TODAY)
+
+Shared hosting cannot run Go. Email OTP is PHP under /api (Vite copies public/api → dist/api).
+
+1. Upload ylttravels-hostinger-static.zip into public_html (overwrite).
+   Confirm api/auth.php, api/offers.php, and api/schema.sql sit next to index.html.
+2. Do NOT set VITE_API_BASE_URL. Leave config.js empty. No api.ylttravels.com.
+3. Open https://ylttravels.com/api/install.php once.
+   Safe run creates missing tables. Add ?drop=1 ONLY if you need a full recreate — that DROPS every table.
+4. Admin → Email: Hostinger SMTP (smtp.hostinger.com:465), then Send OTP.
+   Staff: CoreAdmin (same password already on the server). Email OTP only — no SMS.
+5. Admin → Payments: paste Razorpay Key ID + secret (secret stays on PHP, never in the JS bundle).
+
+Go ylt-api in backend/ is the later Azure swap (same MySQL schema). Not required for this Hostinger deploy.

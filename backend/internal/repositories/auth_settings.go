@@ -96,8 +96,8 @@ func (r *AuthRepo) MarkOTPUsed(ctx context.Context, id string) error {
 func (r *AuthRepo) GetEmployeeByEmail(ctx context.Context, email string) (*models.Employee, error) {
 	var e models.Employee
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, email, password_hash, name, role, status FROM employees WHERE email = ?`,
-		email).Scan(&e.ID, &e.Email, &e.PasswordHash, &e.Name, &e.Role, &e.Status)
+		`SELECT id, email, password_hash, name, role, status FROM employees WHERE email = ? OR name = ? LIMIT 1`,
+		email, email).Scan(&e.ID, &e.Email, &e.PasswordHash, &e.Name, &e.Role, &e.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

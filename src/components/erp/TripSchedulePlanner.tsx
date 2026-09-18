@@ -5,10 +5,32 @@ import { Card, StatCard, Badge, Modal, Field, ModuleHeader, EmptyStateCard, inpu
 import { RippleButton } from '../operator/RippleButton';
 import { ErpLoader } from '../operator/ErpLoader';
 
+import { authUserId } from '../../lib/auth';
+
 const today = new Date().toISOString().slice(0, 10);
 
+function parseStops(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (!t) return [];
+    try {
+      const p = JSON.parse(t);
+      if (Array.isArray(p)) return p.map((x) => String(x ?? '').trim()).filter(Boolean);
+    } catch { /* comma list */ }
+    return t.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 export default function TripSchedulePlanner() {
-  const { routes, schedules, liveTrips, buses, crew, insert, update, remove, logAction, loading } = useErpStore();
+  const store = useErpStore();
+  const routes = Array.isArray(store.routes) ? store.routes : [];
+  const schedules = Array.isArray(store.schedules) ? store.schedules : [];
+  const liveTrips = Array.isArray(store.liveTrips) ? store.liveTrips : [];
+  const buses = Array.isArray(store.buses) ? store.buses : [];
+  const crew = Array.isArray(store.crew) ? store.crew : [];
+  const { insert, remove, logAction, loading } = store;
   const [tab, setTab] = useState<'routes' | 'schedules' | 'live'>('routes');
   const [addingRoute, setAddingRoute] = useState(false);
   const [addingSchedule, setAddingSchedule] = useState(false);
@@ -21,8 +43,8 @@ export default function TripSchedulePlanner() {
   return (
     <div className="space-y-5">
       <ModuleHeader
-        breadcrumb={["Operations", "Trip & Schedule Planner"]}
-        title="Trip & Schedule Planner"
+        breadcrumb={['Bus', 'Trips / schedules']}
+        title="Trips / schedules"
         description="Manage routes, schedules, crew assignments, and live trip tracking."
         actions={
           <>
@@ -64,9 +86,9 @@ export default function TripSchedulePlanner() {
                   <div className="rounded-lg bg-[var(--bg-raised)] px-2 py-1.5"><span style={{ color: 'var(--text-muted)' }}>Duration:</span> <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{r.duration_mins}m</span></div>
                   <div className="rounded-lg bg-[var(--bg-raised)] px-2 py-1.5"><span style={{ color: 'var(--text-muted)' }}>Fare:</span> <span className="font-medium text-crimson-600">₹{r.base_fare}</span></div>
                 </div>
-                {(r.stops as string[]).length > 0 && (
+                {parseStops(r.stops).length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    {(r.stops as string[]).map((s, i) => <span key={i} className="rounded-md bg-crimson-500/10 px-2 py-0.5 text-[11px] text-crimson-600">{s}</span>)}
+                    {parseStops(r.stops).map((s, i) => <span key={i} className="rounded-md bg-crimson-500/10 px-2 py-0.5 text-[11px] text-crimson-600">{s}</span>)}
                   </div>
                 )}
                 <div className="mt-3 flex justify-end border-t pt-3" style={{ borderColor: 'var(--border)' }}>
@@ -76,7 +98,7 @@ export default function TripSchedulePlanner() {
             ))}
           </div>
           {!routes.length && <EmptyStateCard icon={Route} title="No routes built yet" description="Create your first route to start scheduling trips and assigning buses." ctaLabel="Create Route" onCta={() => setAddingRoute(true)} />}
-          {addingRoute && <RouteModal onClose={() => setAddingRoute(false)} onSave={async (d) => { await insert('erp_routes', d); await logAction('add_route', 'erp_routes', '', d); setAddingRoute(false); }} />}
+          {addingRoute && <RouteModal onClose={() => setAddingRoute(false)} onSave={async (d) => { await insert('erp_routes', { ...d, partner_id: authUserId() || undefined }); await logAction('add_route', 'erp_routes', '', d); setAddingRoute(false); }} />}
         </div>
       )}
 
@@ -109,7 +131,7 @@ export default function TripSchedulePlanner() {
               </div>
             ) : <EmptyStateCard icon={Calendar} title="No schedules yet" description="Create a trip schedule to assign buses and crew to routes." ctaLabel="Create Trip" onCta={() => setAddingSchedule(true)} />}
           </Card>
-          {addingSchedule && <ScheduleModal routes={routes} buses={buses} crew={crew} onClose={() => setAddingSchedule(false)} onSave={async (d) => { await insert('erp_schedules', d); await logAction('add_schedule', 'erp_schedules', '', d); setAddingSchedule(false); }} />}
+          {addingSchedule && <ScheduleModal routes={routes} buses={buses} crew={crew} onClose={() => setAddingSchedule(false)} onSave={async (d) => { await insert('erp_schedules', { ...d, partner_id: authUserId() || undefined }); await logAction('add_schedule', 'erp_schedules', '', d); setAddingSchedule(false); }} />}
         </div>
       )}
 

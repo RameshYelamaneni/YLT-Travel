@@ -8,7 +8,13 @@ import { ErpLoader } from '../operator/ErpLoader';
 const today = new Date().toISOString().slice(0, 10);
 
 export default function CrewWorkforceHub() {
-  const { crew, crewDocuments, shifts, slaScores, buses, insert, update, remove, logAction, loading } = useErpStore();
+  const store = useErpStore();
+  const crew = Array.isArray(store.crew) ? store.crew : [];
+  const crewDocuments = Array.isArray(store.crewDocuments) ? store.crewDocuments : [];
+  const shifts = Array.isArray(store.shifts) ? store.shifts : [];
+  const slaScores = Array.isArray(store.slaScores) ? store.slaScores : [];
+  const buses = Array.isArray(store.buses) ? store.buses : [];
+  const { insert, update, remove, logAction, loading } = store;
   const [tab, setTab] = useState<'profiles' | 'documents' | 'shifts' | 'sla'>('profiles');
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ErpCrew | null>(null);
@@ -24,7 +30,7 @@ export default function CrewWorkforceHub() {
   return (
     <div className="space-y-5">
       <ModuleHeader
-        breadcrumb={["People & Finance", "Crew & Workforce Hub"]}
+        breadcrumb={['Bus', 'Crew']}
         title="Crew & Workforce Hub"
         description="Driver and helper profiles, license tracking, shift scheduling, and SLA performance."
         actions={<RippleButton className="text-sm" onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Add Crew Member</RippleButton>}

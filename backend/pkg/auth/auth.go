@@ -23,6 +23,7 @@ type Claims struct {
 	Name  string `json:"name"`
 	Type  string `json:"type"` // customer | admin | agent
 	Role  string `json:"role,omitempty"`
+	Idle  int    `json:"idle,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -62,6 +63,7 @@ func (m *Manager) issue(userID, email, name, userType, role string, ttl time.Dur
 		Name:  name,
 		Type:  userType,
 		Role:  role,
+		Idle:  1800,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			Issuer:    m.issuer,

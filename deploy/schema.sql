@@ -1,8 +1,11 @@
 -- ============================================================
 -- YLT Travels — Transit OS Complete MySQL Schema
--- Database: global_bookings
+-- Canonical copy: public/api/schema.sql  (PHP install.php)
+-- Go embed:      backend/internal/migrate/schema.sql
+-- Deploy copy:   deploy/schema.sql
 -- Engine: InnoDB, Charset: utf8mb4, Collation: utf8mb4_unicode_ci
--- Replaces all legacy PHP/MySQL tables with a clean schema for the Go backend.
+-- PHP (Hostinger now) and Go (Azure later) share this file.
+-- install.php / Go /api/install DROP all tables then apply this file.
 -- ============================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -51,7 +54,7 @@ CREATE TABLE IF NOT EXISTS partners (
 CREATE TABLE IF NOT EXISTS otp_codes (
   id CHAR(36) NOT NULL PRIMARY KEY,
   email VARCHAR(255) NOT NULL,
-  code VARCHAR(10) NOT NULL,
+  code VARCHAR(255) NOT NULL,
   expires_at TIMESTAMP NOT NULL,
   used TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -80,10 +83,19 @@ CREATE TABLE IF NOT EXISTS app_settings (
   smtp_from_name VARCHAR(255),
   smtp_secure TINYINT(1) DEFAULT 1,
   email_enabled TINYINT(1) DEFAULT 0,
+  inventory_provider VARCHAR(50) DEFAULT 'ylt_db',
+  bitla_api_url VARCHAR(500) DEFAULT '',
+  bitla_api_key VARCHAR(255) DEFAULT '',
+  bitla_operator_id VARCHAR(100) DEFAULT '',
+  razorpay_key_id VARCHAR(255) DEFAULT '',
+  razorpay_secret TEXT,
+  payment_provider VARCHAR(30) DEFAULT 'razorpay',
+  payments_enabled TINYINT(1) DEFAULT 1,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT IGNORE INTO app_settings (id) VALUES (1);
+INSERT IGNORE INTO app_settings (id, smtp_from_email, smtp_from_name, smtp_host, smtp_port, smtp_secure, inventory_provider, payment_provider, payments_enabled)
+VALUES (1, 'noreply@ylttravels.com', 'YLT Travels', 'smtp.hostinger.com', 465, 1, 'ylt_db', 'razorpay', 1);
 
 -- ============================================================
 -- BOOKINGS
@@ -120,7 +132,7 @@ CREATE TABLE IF NOT EXISTS bookings (
 CREATE TABLE IF NOT EXISTS hotel_bookings (
   id CHAR(36) NOT NULL PRIMARY KEY,
   pnr VARCHAR(20) NOT NULL UNIQUE,
-  hotel_id CHAR(36),
+  hotel_id VARCHAR(64),
   hotel_name VARCHAR(255) NOT NULL,
   city VARCHAR(100) NOT NULL,
   guest_name VARCHAR(255) NOT NULL,
@@ -133,8 +145,12 @@ CREATE TABLE IF NOT EXISTS hotel_bookings (
   room_type VARCHAR(100) NOT NULL,
   total_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   status VARCHAR(30) NOT NULL DEFAULT 'confirmed',
+  user_identifier VARCHAR(255),
+  payment_status VARCHAR(30) NOT NULL DEFAULT 'paid',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX hotel_bookings_pnr_idx (pnr)
+  INDEX hotel_bookings_pnr_idx (pnr),
+  INDEX hotel_bookings_user_idx (user_identifier),
+  INDEX hotel_bookings_email_idx (guest_email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS payments (
@@ -163,6 +179,8 @@ CREATE TABLE IF NOT EXISTS directors (
   title VARCHAR(255) NOT NULL,
   bio TEXT,
   image_url TEXT,
+  linkedin_url TEXT,
+  order_index INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -174,9 +192,17 @@ CREATE TABLE IF NOT EXISTS offers (
   discount_value VARCHAR(100) NOT NULL,
   expiry_date DATE NOT NULL DEFAULT '2026-12-31',
   is_active TINYINT(1) NOT NULL DEFAULT 1,
+  tag VARCHAR(50) NOT NULL DEFAULT 'Bus',
+  tone VARCHAR(100) NOT NULL DEFAULT 'from-navy-800 to-navy-600',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX offers_promo_code_idx (promo_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO offers (id, promo_code, title, description, discount_value, expiry_date, is_active, tag, tone) VALUES
+  ('a1111111-1111-4111-8111-111111111111', 'FIRST500', '₹500 off first trip', 'Use FIRST500 on AC and sleeper seats across South India.', '₹500', '2026-12-31', 1, 'Bus', 'from-navy-800 to-navy-600'),
+  ('a2222222-2222-4222-8222-222222222222', 'STANDSTAY', 'Stay next to the stand', 'Verified hotels within 200m of major bus terminals.', 'Hotel combo', '2026-12-31', 1, 'Hotel', 'from-gold-600 to-gold-500'),
+  ('a3333333-3333-4333-8333-333333333333', 'WOMENSAFE', 'Women-safe seats', 'Ladies quota and women-rated operators, one tap.', 'Ladies quota', '2026-12-31', 1, 'Women', 'from-navy-700 to-slate-700'),
+  ('a4444444-4444-4444-8444-444444444444', 'YLTPAY', 'Pay on Razorpay', 'UPI, cards and net banking in one secure checkout.', 'Razorpay', '2026-12-31', 1, 'Pay', 'from-slate-800 to-navy-900');
 
 CREATE TABLE IF NOT EXISTS routes (
   id CHAR(36) NOT NULL PRIMARY KEY,
@@ -212,6 +238,14 @@ CREATE TABLE IF NOT EXISTS hotels (
   INDEX hotels_city_idx (city)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+INSERT IGNORE INTO hotels (id, name, city, area, address, star_rating, description, amenities, image_url, gallery_urls, price_per_night, rooms_available, rating, reviews, is_active) VALUES
+  ('b1111111-1111-4111-8111-111111111111', 'YLT Grand Palace Hotel', 'Tirupati', 'Alipiri', 'Alipiri Road, Tirupati', 4, 'SLA-checked stay next to the bus stand with rooftop dining.', '["WiFi","Restaurant","Parking","AC","Room Service"]', 'https://images.pexels.com/photos/258154/pexels-photo-258154.jpeg?auto=compress&cs=tinysrgb&w=800', '["https://images.pexels.com/photos/258154/pexels-photo-258154.jpeg?auto=compress&cs=tinysrgb&w=800","https://images.pexels.com/photos/271624/pexels-photo-271624.jpeg?auto=compress&cs=tinysrgb&w=800"]', 2800.00, 8, 4.50, 86, 1),
+  ('b2222222-2222-4222-8222-222222222222', 'YLT Business Suites', 'Hyderabad', 'Jubilee Hills', 'Road No. 36, Jubilee Hills', 4, 'Modern business hotel with conference rooms and late checkout for night buses.', '["WiFi","Gym","Parking","AC","Business Center"]', 'https://images.pexels.com/photos/1134176/pexels-photo-1134176.jpeg?auto=compress&cs=tinysrgb&w=800', '["https://images.pexels.com/photos/1134176/pexels-photo-1134176.jpeg?auto=compress&cs=tinysrgb&w=800"]', 3200.00, 10, 4.40, 64, 1),
+  ('b3333333-3333-4333-8333-333333333333', 'YLT City Comfort', 'Chennai', 'Koyambedu', 'Near CMBT, Koyambedu', 3, 'Clean rooms 200m from the bus terminal. Instant PNR after Razorpay.', '["WiFi","AC","Parking","Restaurant"]', 'https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=800', '["https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=800"]', 1900.00, 12, 4.20, 51, 1),
+  ('b4444444-4444-4444-8444-444444444444', 'YLT Heritage Inn', 'Bangalore', 'Majestic', 'Near Kempegowda Bus Station', 3, 'Heritage property beside the stand. Women-safe front desk 24x7.', '["WiFi","Restaurant","AC","Laundry"]', 'https://images.pexels.com/photos/2507010/pexels-photo-2507010.jpeg?auto=compress&cs=tinysrgb&w=800', '["https://images.pexels.com/photos/2507010/pexels-photo-2507010.jpeg?auto=compress&cs=tinysrgb&w=800"]', 2400.00, 7, 4.30, 44, 1),
+  ('b5555555-5555-4555-8555-555555555555', 'YLT Temple View Residency', 'Tirupati', 'RTC Bus Stand', 'Opposite RTC Complex', 3, 'Walk to the RTC stand. Vegetarian kitchen and early checkout for darshan.', '["WiFi","Restaurant","AC","Parking"]', 'https://images.pexels.com/photos/1457842/pexels-photo-1457842.jpeg?auto=compress&cs=tinysrgb&w=800', '["https://images.pexels.com/photos/1457842/pexels-photo-1457842.jpeg?auto=compress&cs=tinysrgb&w=800"]', 2100.00, 9, 4.35, 72, 1),
+  ('b6666666-6666-4666-8666-666666666666', 'YLT Lakeside Court', 'Vijayawada', 'Benz Circle', 'MG Road, Vijayawada', 4, 'Quiet rooms with pool access for overnight Hyderabad–Vijayawada trips.', '["WiFi","Pool","Restaurant","Parking","AC"]', 'https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=800', '["https://images.pexels.com/photos/261102/pexels-photo-261102.jpeg?auto=compress&cs=tinysrgb&w=800"]', 2600.00, 6, 4.45, 38, 1);
+
 CREATE TABLE IF NOT EXISTS newsletter_subscribers (
   id CHAR(36) NOT NULL PRIMARY KEY,
   email VARCHAR(255) NOT NULL UNIQUE,
@@ -235,11 +269,11 @@ CREATE TABLE IF NOT EXISTS email_templates (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT IGNORE INTO email_templates (`key`, name, subject, body_html) VALUES
-  ('otp_login', 'OTP Login', 'Your YLT Travels Login Code', '<p>Your code: {{code}}</p>'),
-  ('booking_confirmation', 'Booking Confirmation', 'Booking Confirmed - {{pnr}}', '<p>Your booking is confirmed.</p>'),
-  ('test_smtp', 'SMTP Test', 'YLT Travels SMTP Test', '<p>SMTP test successful.</p>'),
-  ('welcome', 'Welcome', 'Welcome to YLT Travels', '<p>Welcome aboard!</p>');
+INSERT IGNORE INTO email_templates (id, `key`, name, subject, body_html) VALUES
+  ('c1111111-1111-4111-8111-111111111111', 'otp_login', 'OTP Login', 'Your YLT Travels Login Code', '<p>Your YLT Travels login code is <strong>{{code}}</strong>. Valid for 10 minutes. No SMS is sent.</p>'),
+  ('c2222222-2222-4222-8222-222222222222', 'booking_confirmation', 'Booking Confirmation', 'Booking Confirmed - {{pnr}}', '<p>Your booking is confirmed. PNR: {{pnr}}</p>'),
+  ('c3333333-3333-4333-8333-333333333333', 'test_smtp', 'SMTP Test', 'YLT Travels SMTP Test', '<p>SMTP test successful.</p>'),
+  ('c4444444-4444-4444-8444-444444444444', 'welcome', 'Welcome', 'Welcome to YLT Travels', '<p>Welcome aboard!</p>');
 
 CREATE TABLE IF NOT EXISTS employee_files (
   id CHAR(36) NOT NULL PRIMARY KEY,
@@ -272,6 +306,10 @@ CREATE TABLE IF NOT EXISTS erp_buses (
   gps_status VARCHAR(30) DEFAULT 'online',
   route_id CHAR(36),
   driver_id CHAR(36),
+  cleaner_id CHAR(36),
+  photo_url TEXT,
+  next_maintenance DATE,
+  last_service_date DATE,
   engine_hours DECIMAL(10,2) DEFAULT 0,
   odometer_km DECIMAL(12,2) DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -287,6 +325,10 @@ CREATE TABLE IF NOT EXISTS erp_bus_health (
   battery_volt DECIMAL(5,2),
   emissions_ok TINYINT(1) DEFAULT 1,
   fuel_pct DECIMAL(5,2),
+  gps_status VARCHAR(30),
+  odometer_km DECIMAL(12,2),
+  engine_hours DECIMAL(10,2),
+  notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -315,6 +357,10 @@ CREATE TABLE IF NOT EXISTS erp_crew (
   assigned_vehicle_id CHAR(36),
   status VARCHAR(30) DEFAULT 'active',
   salary DECIMAL(10,2),
+  photo_url TEXT,
+  address TEXT,
+  emergency_contact VARCHAR(100),
+  joined_date DATE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -340,6 +386,7 @@ CREATE TABLE IF NOT EXISTS erp_shifts (
   route_id CHAR(36),
   bus_id CHAR(36),
   status VARCHAR(30) DEFAULT 'scheduled',
+  notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -352,6 +399,7 @@ CREATE TABLE IF NOT EXISTS erp_sla_scores (
   customer_rating DECIMAL(3,2),
   safety_incidents INT DEFAULT 0,
   overall_score DECIMAL(5,2),
+  notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -397,6 +445,7 @@ CREATE TABLE IF NOT EXISTS erp_channel_sales (
   commission_pct DECIMAL(5,2),
   commission_amount DECIMAL(10,2),
   net_amount DECIMAL(10,2),
+  status VARCHAR(30) DEFAULT 'posted',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -413,6 +462,7 @@ CREATE TABLE IF NOT EXISTS erp_routes (
   distance_km INT,
   duration_mins INT,
   base_fare DECIMAL(10,2),
+  status VARCHAR(30) DEFAULT 'active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -426,6 +476,7 @@ CREATE TABLE IF NOT EXISTS erp_schedules (
   departure_time VARCHAR(20),
   arrival_time VARCHAR(20),
   recurrence VARCHAR(30) DEFAULT 'daily',
+  status VARCHAR(30) DEFAULT 'scheduled',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -440,6 +491,7 @@ CREATE TABLE IF NOT EXISTS erp_live_trips (
   speed_kmph DECIMAL(6,2),
   delay_minutes INT DEFAULT 0,
   passengers_onboard INT DEFAULT 0,
+  started_at TIMESTAMP NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -498,6 +550,7 @@ CREATE TABLE IF NOT EXISTS erp_maintenance_logs (
   odometer_km DECIMAL(12,2),
   cost DECIMAL(10,2),
   service_center VARCHAR(255),
+  description TEXT,
   next_service_date DATE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -511,7 +564,9 @@ CREATE TABLE IF NOT EXISTS erp_part_replacements (
   quantity INT DEFAULT 1,
   unit_cost DECIMAL(10,2),
   total_cost DECIMAL(10,2),
+  replaced_date DATE,
   warranty_expiry DATE,
+  notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -524,6 +579,7 @@ CREATE TABLE IF NOT EXISTS erp_compliance (
   expiry_date DATE,
   status VARCHAR(30) DEFAULT 'valid',
   alert_days INT DEFAULT 30,
+  notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -557,6 +613,8 @@ CREATE TABLE IF NOT EXISTS erp_expenses (
   amount DECIMAL(10,2),
   bus_id CHAR(36),
   crew_id CHAR(36),
+  description TEXT,
+  receipt_url TEXT,
   gst_applicable TINYINT(1) DEFAULT 0,
   gst_amount DECIMAL(10,2),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -590,11 +648,14 @@ CREATE TABLE IF NOT EXISTS erp_partner_profile (
   state VARCHAR(100),
   pincode VARCHAR(20),
   logo_url TEXT,
-  brand_color VARCHAR(20) DEFAULT '#c81e44',
+  brand_color VARCHAR(20) DEFAULT '#0b1f3a',
   bank_name VARCHAR(255),
   bank_account_number VARCHAR(100),
   bank_ifsc VARCHAR(50),
+  bank_branch VARCHAR(255),
   upi_id VARCHAR(100),
+  website_url VARCHAR(255),
+  description TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -633,6 +694,61 @@ CREATE TABLE IF NOT EXISTS erp_api_keys (
   last_used_at TIMESTAMP NULL,
   expires_at TIMESTAMP NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS hotel_rooms (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  hotel_id VARCHAR(64) NOT NULL,
+  partner_id VARCHAR(64),
+  room_number VARCHAR(30) NOT NULL,
+  floor VARCHAR(20),
+  room_type VARCHAR(100) NOT NULL DEFAULT 'Standard',
+  rate DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  status VARCHAR(30) NOT NULL DEFAULT 'vacant',
+  hk_status VARCHAR(30) NOT NULL DEFAULT 'clean',
+  booking_id CHAR(36),
+  guest_name VARCHAR(255),
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX hotel_rooms_hotel_idx (hotel_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  thread_key VARCHAR(190) NOT NULL,
+  channel VARCHAR(40) NOT NULL DEFAULT 'web',
+  role VARCHAR(20) NOT NULL,
+  content TEXT NOT NULL,
+  email VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX chat_thread_idx (thread_key, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS partner_cars (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  partner_id VARCHAR(64),
+  name VARCHAR(255) NOT NULL,
+  type VARCHAR(50) NOT NULL DEFAULT 'Sedan',
+  pricing_model VARCHAR(50) NOT NULL DEFAULT 'per_km',
+  rate DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  status VARCHAR(30) NOT NULL DEFAULT 'active',
+  fuel_pct INT NOT NULL DEFAULT 100,
+  driver_name VARCHAR(255),
+  next_maintenance DATE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX partner_cars_partner_idx (partner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS feedback_reviews (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  token VARCHAR(64) NOT NULL UNIQUE,
+  pnr VARCHAR(20) NOT NULL,
+  booking_type VARCHAR(20) NOT NULL,
+  booking_id VARCHAR(64),
+  email VARCHAR(255),
+  score TINYINT NOT NULL,
+  comment TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX feedback_pnr_idx (pnr)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

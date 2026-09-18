@@ -35,6 +35,7 @@ export interface Hotel {
   contact_phone: string;
   contact_email: string;
   base_price: number;
+  listing_source?: 'partner' | 'catalog';
 }
 
 export interface HotelSearchFilters {

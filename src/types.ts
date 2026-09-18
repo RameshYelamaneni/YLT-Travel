@@ -48,6 +48,11 @@ export interface Bus {
   prime: boolean;
   insurance_available: boolean;
   smart_score: number;
+  fleet_bus_id?: string;
+  schedule_id?: string;
+  seats?: Seat[];
+  photo_url?: string;
+  listing_source?: 'partner' | 'catalog';
 }
 
 export interface Seat {

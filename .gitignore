@@ -5,7 +5,15 @@ dist/
 .env
 .env.*
 !.env.template
+!.env.example
+/data/
+/public/uploads/careers/**
+!/public/uploads/careers/.htaccess
 frontend/node_modules/
 frontend/.next/
 backend/bin/
 backend/.env
+backend/ylt-api
+backend/ylt-api.exe
+public/api/config.php
+rzp-test-key.csv

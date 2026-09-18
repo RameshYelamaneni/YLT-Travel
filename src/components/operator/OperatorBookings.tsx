@@ -1,8 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Bus, Car, Users, Bed, Search, Loader2, Ticket, MapPin, Calendar, Clock } from 'lucide-react';
 import { formatINR } from '../../lib/format';
-
-const API = import.meta.env.VITE_API_BASE_URL ?? '';
+import { apiFetch } from '../../lib/api';
 
 type BookingType = 'bus' | 'car' | 'carpool' | 'hotel';
 
@@ -39,8 +38,8 @@ export default function OperatorBookings() {
     (async () => {
       try {
         const [busRes, hotelRes] = await Promise.all([
-          fetch(`${API}/bookings.php?all=1&limit=200`).then(r => r.ok ? r.json() : []).catch(() => []),
-          fetch(`${API}/hotel-bookings.php?all=1&limit=200`).then(r => r.ok ? r.json() : []).catch(() => []),
+          apiFetch('/api/bookings?all=1&limit=200').then(r => r.ok ? r.json() : []).catch(() => []),
+          apiFetch('/api/hotel-bookings?all=1&limit=200').then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
         const bus: UnifiedBooking[] = (Array.isArray(busRes) ? busRes : []).map((b: any) => ({
           pnr: b.pnr,

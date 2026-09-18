@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Wallet, TrendingUp, DollarSign, Receipt, Calendar, Plus, Download, Trash2 } from 'lucide-react';
-import { useErpStore, fmtINR, totalEarnings } from '../../store/erpStore';
+import { useErpStore, fmtINR, totalEarnings, profitForecast } from '../../store/erpStore';
 import { Card, StatCard, Badge, Modal, Field, ModuleHeader, EmptyStateCard, inputCls } from './ui';
 import { RippleButton } from '../operator/RippleButton';
 import { ErpLoader } from '../operator/ErpLoader';
@@ -8,7 +8,7 @@ import { ErpLoader } from '../operator/ErpLoader';
 const today = new Date().toISOString().slice(0, 10);
 
 export default function EarningsPayoutCenter() {
-  const { earnings, settlements, payouts, insert, update, logAction, loading } = useErpStore();
+  const { earnings, settlements, payouts, channelSales, expenses, insert, update, logAction, loading } = useErpStore();
   const [tab, setTab] = useState<'daily' | 'settlements' | 'gst' | 'payouts'>('daily');
   const [addingPayout, setAddingPayout] = useState(false);
 
@@ -27,8 +27,8 @@ export default function EarningsPayoutCenter() {
   });
   const daily = Array.from(dailyMap.entries()).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14);
 
-  // Channel breakdown
-  const channels = ['YLT', 'RedBus', 'AbhiBus'];
+  // Channel mix from live earnings rows (office / agent / api / website).
+  const channels = [...new Set(earnings.map((e) => e.channel || 'website'))];
   const channelData = channels.map((ch) => {
     const items = earnings.filter((e) => e.channel === ch);
     return { channel: ch, gross: items.reduce((s, e) => s + e.gross_amount, 0), net: items.reduce((s, e) => s + e.net_amount, 0), count: items.reduce((s, e) => s + e.booking_count, 0) };
@@ -47,6 +47,15 @@ export default function EarningsPayoutCenter() {
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Net Earnings" value={`₹${fmtINR(totals.net)}`} sub="After commission" icon={Wallet} tone="green" /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="Commission Paid" value={`₹${fmtINR(totals.commission)}`} icon={DollarSign} tone="amber" /></div>
         <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="GST Collected" value={`₹${fmtINR(totals.gst)}`} icon={Receipt} tone="blue" /></div>
+        {(() => {
+          const fc = profitForecast(channelSales, expenses, earnings, 30);
+          return (
+            <>
+              <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="AI 30d profit" value={`₹${fmtINR(fc.predictedProfit)}`} sub={`${fc.predictedMarginPct.toFixed(1)}% margin`} icon={TrendingUp} tone="teal" /></div>
+              <div className="col-span-12 sm:col-span-6 lg:col-span-3"><StatCard label="AI 30d cost" value={`₹${fmtINR(fc.predictedCost)}`} sub={`Occ +5% ₹${fmtINR(fc.occupancyUpProfit)}`} icon={DollarSign} tone="amber" /></div>
+            </>
+          );
+        })()}
       </div>
 
       <div className="flex gap-1 border-b" style={{ borderColor: 'var(--border)' }}>

@@ -1,8 +1,6 @@
 // Package db owns the singleton *sql.DB connection pool. Centralizing pool
 // config here prevents connection storms: every concurrent goroutine draws
-// from the same bounded pool instead of opening its own connection, so
-// Postgres never sees more than MaxOpenConns simultaneous sessions regardless
-// of how many operators open dashboards at once.
+// from the same bounded pool instead of opening its own connection.
 package db
 
 import (
@@ -25,32 +23,35 @@ func Init(ctx context.Context, cfg config.Config) error {
 	if pool != nil {
 		return nil
 	}
-	db, err := sql.Open("mysql", cfg.DSN())
-	if err != nil {
-		return fmt.Errorf("db: open: %w", err)
+	var last error
+	for _, dsn := range cfg.DSNs() {
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			last = err
+			continue
+		}
+		db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+		db.SetMaxIdleConns(cfg.DBMaxIdleConns)
+		db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+		db.SetConnMaxIdleTime(cfg.DBConnMaxIdleTime)
+
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err = db.PingContext(pingCtx)
+		cancel()
+		if err != nil {
+			last = err
+			db.Close()
+			continue
+		}
+		pool = db
+		log.Printf("db: pool ready (maxOpen=%d maxIdle=%d lifetime=%s idle=%s)",
+			cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime, cfg.DBConnMaxIdleTime)
+		return nil
 	}
-
-	// Bounded pool — the single most important safeguard against connection
-	// storms. With MaxOpenConns=80, even 200 goroutines issuing QueryContext
-	// concurrently only ever hold 80 live connections; the rest block on the
-	// pool until one frees, instead of hammering Postgres with 200 new
-	// handshakes.
-	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
-	db.SetMaxIdleConns(cfg.DBMaxIdleConns) // keep half warm for fast reuse
-	db.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.DBConnMaxIdleTime)
-
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := db.PingContext(pingCtx); err != nil {
-		db.Close()
-		return fmt.Errorf("db: ping: %w", err)
+	if last == nil {
+		last = fmt.Errorf("no DSN configured (set DATABASE_URL or MYSQL_DSN in hPanel, then restart ylt-api)")
 	}
-
-	pool = db
-	log.Printf("db: pool ready (maxOpen=%d maxIdle=%d lifetime=%s idle=%s)",
-		cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBConnMaxLifetime, cfg.DBConnMaxIdleTime)
-	return nil
+	return fmt.Errorf("db: ping: %w", last)
 }
 
 // Pool returns the initialized singleton.

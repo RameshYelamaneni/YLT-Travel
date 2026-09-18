@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, SlidersHorizontal, Star, MapPin, Shield, ChevronDown, ChevronUp, Building2, Calendar, Users } from 'lucide-react';
-import { useHotelStore, HOTEL_CITIES } from '../../store/hotelStore';
+import { useHotelStore, HOTEL_CITIES, defaultStayDates } from '../../store/hotelStore';
 
 const AMENITY_OPTIONS = ['WiFi', 'Pool', 'Spa', 'Restaurant', 'Parking', 'Gym', 'Bar', 'Room Service'];
 
@@ -11,7 +11,7 @@ const DEST_IMAGES: Record<string, string> = {
   Bangalore: 'https://images.pexels.com/photos/3573351/pexels-photo-3573351.jpeg?auto=compress&cs=tinysrgb&w=800',
 };
 
-const inputClass = 'w-full rounded-lg border-2 px-3 py-3 text-sm font-medium transition hover:border-crimson-500/50 focus:outline-none focus:ring-2 focus:ring-crimson-500/30';
+const inputClass = 'w-full rounded-lg border-2 px-3 py-3 text-sm font-medium transition hover:border-gold-500/50 focus:outline-none focus:ring-2 focus:ring-gold-500/30';
 const inputStyle = {
   backgroundColor: 'var(--bg-surface)',
   borderColor: 'var(--border)',
@@ -21,7 +21,7 @@ const inputStyle = {
 
 const labelClass = 'mb-2 flex items-center gap-1.5 text-sm font-bold uppercase tracking-wide';
 const labelTextStyle = { color: 'var(--text-primary)' };
-const labelIconColor = 'text-crimson-500';
+const labelIconColor = 'text-gold-600';
 
 export default function HotelSearchPage({ go }: { go: (v: any) => void }) {
   const store = useHotelStore();
@@ -29,8 +29,12 @@ export default function HotelSearchPage({ go }: { go: (v: any) => void }) {
   const [cityOpen, setCityOpen] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
+  useEffect(() => { void store.hydrateFromApi(); }, []);
+
   function handleSearch() {
-    store.searchHotels();
+    const stay = defaultStayDates(store.filters.checkIn, store.filters.checkOut);
+    store.setFilters({ checkIn: stay.checkIn, checkOut: stay.checkOut });
+    store.searchHotels({ checkIn: stay.checkIn, checkOut: stay.checkOut });
     go({ name: 'hotelResults' });
   }
 
@@ -251,7 +255,7 @@ export default function HotelSearchPage({ go }: { go: (v: any) => void }) {
           {/* Search button */}
           <button
             onClick={handleSearch}
-            className="group mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-crimson-600 px-6 py-4 text-base font-bold text-white shadow-lg transition hover:bg-crimson-700 active:scale-[.98]"
+            className="btn-search group mt-6 w-full py-4 text-base"
           >
             <Search className="h-5 w-5 transition-transform group-hover:scale-110" /> Search Hotels
           </button>

@@ -52,7 +52,7 @@ func (r *BookingRepo) GetByPNR(ctx context.Context, pnr string) (*models.Booking
 }
 
 func (r *BookingRepo) ListByUser(ctx context.Context, user string) ([]models.Booking, error) {
-	rows, err := r.db.QueryContext(ctx, bookingSelect+` WHERE user_identifier = ? ORDER BY created_at DESC`, user)
+	rows, err := r.db.QueryContext(ctx, bookingSelect+` WHERE user_identifier = ? OR contact_email = ? ORDER BY created_at DESC`, user, user)
 	if err != nil {
 		return nil, err
 	}
@@ -164,10 +164,11 @@ type OfferRepo struct{ db *sql.DB }
 func NewOfferRepo(db *sql.DB) *OfferRepo { return &OfferRepo{db: db} }
 
 func (r *OfferRepo) List(ctx context.Context, all bool) ([]models.Offer, error) {
-	q := `SELECT id, promo_code, title, description, discount_value, expiry_date, is_active, created_at FROM offers ORDER BY created_at DESC`
+	q := `SELECT id, promo_code, title, description, discount_value, expiry_date, is_active, COALESCE(tag,'Bus'), COALESCE(tone,'from-navy-800 to-navy-600'), created_at FROM offers`
 	if !all {
 		q += ` WHERE is_active = 1`
 	}
+	q += ` ORDER BY created_at DESC`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -176,10 +177,16 @@ func (r *OfferRepo) List(ctx context.Context, all bool) ([]models.Offer, error) 
 	out := make([]models.Offer, 0)
 	for rows.Next() {
 		var o models.Offer
-		if err := rows.Scan(&o.ID, &o.PromoCode, &o.Title, &o.Description,
-			&o.DiscountValue, &o.ExpiryDate, &o.IsActive, &o.CreatedAt); err != nil {
+		var desc sql.NullString
+		var active int
+		if err := rows.Scan(&o.ID, &o.PromoCode, &o.Title, &desc,
+			&o.DiscountValue, &o.ExpiryDate, &active, &o.Tag, &o.Tone, &o.CreatedAt); err != nil {
 			return nil, err
 		}
+		if desc.Valid {
+			o.Description = desc.String
+		}
+		o.IsActive = active == 1
 		out = append(out, o)
 	}
 	return out, nil
@@ -189,13 +196,23 @@ func (r *OfferRepo) Upsert(ctx context.Context, o *models.Offer) error {
 	if o.ID == "" {
 		o.ID = uuid.NewString()
 	}
-	q := `INSERT INTO offers (id, promo_code, title, description, discount_value, expiry_date, is_active, created_at)
-	      VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+	if o.Tag == "" {
+		o.Tag = "Bus"
+	}
+	if o.Tone == "" {
+		o.Tone = "from-navy-800 to-navy-600"
+	}
+	active := 0
+	if o.IsActive {
+		active = 1
+	}
+	q := `INSERT INTO offers (id, promo_code, title, description, discount_value, expiry_date, is_active, tag, tone, created_at)
+	      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
 	      ON DUPLICATE KEY UPDATE promo_code=VALUES(promo_code), title=VALUES(title),
 	      description=VALUES(description), discount_value=VALUES(discount_value),
-	      expiry_date=VALUES(expiry_date), is_active=VALUES(is_active)`
+	      expiry_date=VALUES(expiry_date), is_active=VALUES(is_active), tag=VALUES(tag), tone=VALUES(tone)`
 	_, err := r.db.ExecContext(ctx, q, o.ID, o.PromoCode, o.Title, o.Description,
-		o.DiscountValue, o.ExpiryDate, o.IsActive)
+		o.DiscountValue, o.ExpiryDate, active, o.Tag, o.Tone)
 	return err
 }
 

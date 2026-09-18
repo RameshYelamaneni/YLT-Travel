@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ylttravels/transit-os/backend/internal/models"
@@ -219,6 +220,7 @@ func NewOfferHandler(svc *services.OfferService) *OfferHandler {
 func (h *OfferHandler) Register(rg *gin.RouterGroup) {
 	rg.GET("/offers", h.list)
 	rg.POST("/offers", h.upsert)
+	rg.DELETE("/offers", h.delete)
 	rg.DELETE("/offers/:id", h.delete)
 }
 
@@ -229,13 +231,33 @@ func (h *OfferHandler) list(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"offers": offers})
+	c.JSON(http.StatusOK, offers)
 }
 
 func (h *OfferHandler) upsert(c *gin.Context) {
-	var o models.Offer
-	if err := c.ShouldBindJSON(&o); err != nil {
+	var raw map[string]any
+	if err := c.ShouldBindJSON(&raw); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	o := models.Offer{
+		ID:            str(raw["id"]),
+		PromoCode:     strings.ToUpper(strFirst(raw["promo_code"], raw["promoCode"])),
+		Title:         str(raw["title"]),
+		Description:   str(raw["description"]),
+		DiscountValue: strFirst(raw["discount_value"], raw["discountValue"]),
+		ExpiryDate:    orDefault(strFirst(raw["expiry_date"], raw["expiryDate"]), "2026-12-31"),
+		Tag:           orDefault(str(raw["tag"]), "Bus"),
+		Tone:          orDefault(str(raw["tone"]), "from-navy-800 to-navy-600"),
+		IsActive:      true,
+	}
+	if v, ok := raw["is_active"]; ok {
+		o.IsActive = truthy(v)
+	} else if v, ok := raw["isActive"]; ok {
+		o.IsActive = truthy(v)
+	}
+	if o.PromoCode == "" || o.Title == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "promo_code and title required."})
 		return
 	}
 	if err := h.svc.Upsert(c.Request.Context(), &o); err != nil {
@@ -247,6 +269,13 @@ func (h *OfferHandler) upsert(c *gin.Context) {
 
 func (h *OfferHandler) delete(c *gin.Context) {
 	id := c.Param("id")
+	if id == "" {
+		id = c.Query("id")
+	}
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
+		return
+	}
 	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

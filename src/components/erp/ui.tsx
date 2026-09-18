@@ -231,9 +231,9 @@ export function Drawer({
 
   if (!open) return null;
   return (
-    <div className="erp-overlay-enter fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+    <div className="erp-overlay-enter erp-backdrop fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <div
-        className={`erp-modal-enter flex h-full w-full flex-col border-l bg-[var(--bg-surface)] ${wide ? 'max-w-2xl' : 'max-w-md'}`}
+        className={`erp-modal-enter erp-modal-card flex h-full w-full flex-col border-l bg-[var(--bg-surface)] ${wide ? 'max-w-2xl' : 'max-w-md'}`}
         style={{ borderColor: 'var(--border)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -270,9 +270,9 @@ export function Badge({ tone, children }: { tone: 'green' | 'amber' | 'red' | 'b
 export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode; wide?: boolean }) {
   if (!open) return null;
   return (
-    <div className="erp-overlay-enter fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div className="erp-overlay-enter erp-backdrop fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div
-        className={`erp-modal-enter max-h-[90vh] w-full overflow-y-auto rounded-2xl border bg-[var(--bg-surface)] p-6 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
+        className={`erp-modal-enter erp-modal-card max-h-[90vh] w-full overflow-y-auto rounded-2xl border bg-[var(--bg-surface)] p-6 ${wide ? 'max-w-3xl' : 'max-w-lg'}`}
         style={{ borderColor: 'var(--border)' }}
         onClick={(e) => e.stopPropagation()}
       >

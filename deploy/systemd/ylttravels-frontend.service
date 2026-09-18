@@ -1,23 +1,15 @@
 [Unit]
-Description=YLT Travels Next.js Frontend
-After=network.target ylttravels-backend.service
-Wants=network-online.target
+Description=YLT Travels static preview (optional). Prefer nginx serving dist/ and proxying /api to ylt-api.
 
 [Service]
 Type=simple
 User=ylt
 Group=ylt
-WorkingDirectory=/var/www/ylttravels/frontend
-EnvironmentFile=/var/www/ylttravels/.env
+WorkingDirectory=/var/www/ylttravels
 Environment=NODE_ENV=production
-Environment=PORT=3000
-Environment=HOSTNAME=127.0.0.1
-ExecStart=/usr/bin/node /var/www/ylttravels/frontend/node_modules/.bin/next start -p 3000 -H 127.0.0.1
+ExecStart=/usr/bin/npx --yes vite preview --host 127.0.0.1 --port 4173 --outDir dist
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=ylttravels-frontend
 
 [Install]
 WantedBy=multi-user.target

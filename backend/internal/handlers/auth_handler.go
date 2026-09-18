@@ -33,6 +33,8 @@ func (h *AuthHandler) Register(rg *gin.RouterGroup) {
 	rg.POST("/auth/admin-signin", h.adminSignin)
 	rg.POST("/auth/send-otp", h.sendOTP)
 	rg.POST("/auth/verify-otp", h.verifyOTP)
+	rg.POST("/auth/otp/send", h.sendOTP)
+	rg.POST("/auth/otp/verify", h.verifyOTP)
 	rg.POST("/auth/forgot-password/send", h.forgotPasswordSend)
 	rg.POST("/auth/forgot-password/reset", h.forgotPasswordReset)
 	rg.GET("/auth/me", h.jwt.Middleware(), h.me)
@@ -116,7 +118,8 @@ func (h *AuthHandler) sendOTP(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.svc.SendOTP(c.Request.Context(), req.Email); err != nil {
+	res, err := h.svc.SendOTP(c.Request.Context(), req.Email)
+	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "too many") {
 			status = http.StatusTooManyRequests
@@ -126,7 +129,11 @@ func (h *AuthHandler) sendOTP(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "OTP sent. Check your inbox."})
+	out := gin.H{"ok": true, "message": "OTP sent. Check your inbox."}
+	if res != nil && res.DevHint != "" {
+		out["hint"] = res.DevHint
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *AuthHandler) verifyOTP(c *gin.Context) {

@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type { Hotel, HotelSearchFilters, HotelBooking, BookingPricing, HotelRoom, HotelReview } from '../types-hotel';
+import { fetchHotels, fetchHotelById } from '../lib/hotels';
+import { catalogIdentity, mergeLiveWithCatalog } from '../lib/publicCatalog';
 
 const HOTEL_PHOTOS = [
   'https://images.pexels.com/photos/258154/pexels-photo-258154.jpeg?auto=compress&cs=tinysrgb&w=800',
@@ -20,12 +22,25 @@ const ALL_AMENITIES = ['WiFi', 'Pool', 'Spa', 'Restaurant', 'Parking', 'Gym', 'B
 
 const CITIES = ['Tirupati', 'Chennai', 'Hyderabad', 'Bangalore', 'Vijayawada', 'Visakhapatnam', 'Nellore', 'Guntur'];
 
-function pick<T>(arr: T[], n: number): T[] {
-  const s = [...arr].sort(() => Math.random() - 0.5);
-  return s.slice(0, n);
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
 }
 
-function genRooms(hotelId: string): HotelRoom[] {
+function pickSeeded<T>(arr: T[], n: number, seed: number): T[] {
+  const copy = [...arr];
+  let s = seed || 1;
+  for (let i = copy.length - 1; i > 0; i--) {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    const j = s % (i + 1);
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, n);
+}
+
+function genRooms(hotelId: string, basePrice = 0): HotelRoom[] {
+  const seed = hashStr(hotelId);
   const types = [
     { room_type: 'Standard', bed_type: 'Double', max_guests: 2, base: 1800 },
     { room_type: 'Deluxe', bed_type: 'King', max_guests: 3, base: 3500 },
@@ -33,19 +48,21 @@ function genRooms(hotelId: string): HotelRoom[] {
     { room_type: 'Premium', bed_type: 'Twin', max_guests: 2, base: 4200 },
     { room_type: 'Family Room', bed_type: 'Double', max_guests: 5, base: 5500 },
   ];
-  return types.slice(0, 2 + Math.floor(Math.random() * 3)).map((t, i) => ({
+  const count = 2 + (seed % 3);
+  return types.slice(0, count).map((t, i) => ({
     id: `${hotelId}-r${i}`,
     room_type: t.room_type,
     bed_type: t.bed_type,
     max_guests: t.max_guests,
-    price_per_night: t.base + Math.floor(Math.random() * 1200),
-    amenities: pick(ALL_AMENITIES, 3 + Math.floor(Math.random() * 4)),
+    price_per_night: (basePrice > 0 && i === 0) ? basePrice : t.base + (seed % 1200),
+    amenities: pickSeeded(ALL_AMENITIES, 3 + (seed % 4), seed + i),
     photo: ROOM_PHOTOS[i % ROOM_PHOTOS.length],
-    available: Math.random() > 0.15,
+    available: true,
   }));
 }
 
-function genReviews(): HotelReview[] {
+function genReviews(hotelId = 'h'): HotelReview[] {
+  const seed = hashStr(hotelId);
   const names = ['Ravi K.', 'Priya S.', 'Arjun M.', 'Divya R.', 'Kiran T.', 'Meera N.', 'Suresh L.', 'Anjali P.'];
   const comments = [
     'Excellent stay! Staff was very courteous and room was spotless.',
@@ -57,16 +74,21 @@ function genReviews(): HotelReview[] {
     'Beautiful property with well-maintained gardens. Highly recommended.',
     'Room service was prompt. The restaurant serves excellent local cuisine.',
   ];
-  const n = 3 + Math.floor(Math.random() * 6);
+  const n = 3 + (seed % 6);
   return Array.from({ length: n }, (_, i) => ({
-    id: `rev-${i}-${Math.random().toString(36).slice(2, 8)}`,
-    guest_name: names[i % names.length],
-    rating: 3 + Math.floor(Math.random() * 3),
-    date: new Date(Date.now() - Math.random() * 90 * 86400000).toISOString().slice(0, 10),
-    comment: comments[i % comments.length],
+    id: `rev-${hotelId}-${i}`,
+    guest_name: names[(seed + i) % names.length],
+    rating: 3 + ((seed + i) % 3),
+    date: new Date(Date.now() - ((seed + i * 86400000) % (90 * 86400000))).toISOString().slice(0, 10),
+    comment: comments[(seed + i) % comments.length],
   }));
 }
 
+function asCatalogHotel(h: Hotel): Hotel {
+  return { ...h, listing_source: 'catalog' };
+}
+
+/** Previous public demo inventory (names/cities from generateHotels before mocks were stripped). */
 function generateHotels(): Hotel[] {
   const templates = [
     { name: 'Grand Palace Hotel', desc: 'A luxurious property with panoramic city views, infinity pool, and world-class dining. Perfect for discerning travellers seeking premium comfort.' },
@@ -88,12 +110,14 @@ function generateHotels(): Hotel[] {
     const count = ['Tirupati', 'Chennai', 'Hyderabad', 'Bangalore'].includes(city) ? 3 : 2;
     for (let i = 0; i < count; i++) {
       const t = templates[hid % templates.length];
-      const stars = 2 + Math.floor(Math.random() * 4);
-      const reviews = genReviews();
+      const id = `h${hid}`;
+      const seed = hashStr(id);
+      const stars = 2 + (seed % 4);
+      const reviews = genReviews(id);
       const avg = reviews.length ? Math.round((reviews.reduce((s, r) => s + r.rating, 0) / reviews.length) * 10) / 10 : 0;
-      const rooms = genRooms(`h${hid}`);
-      hotels.push({
-        id: `h${hid}`,
+      const rooms = genRooms(id);
+      hotels.push(asCatalogHotel({
+        id,
         name: t.name,
         city,
         address: `${100 + hid * 17} Main Road, ${city}`,
@@ -101,26 +125,169 @@ function generateHotels(): Hotel[] {
         avg_rating: avg,
         review_count: reviews.length,
         description: t.desc,
-        photos: pick(HOTEL_PHOTOS, 3 + Math.floor(Math.random() * 2)),
-        amenities: pick(ALL_AMENITIES, 4 + Math.floor(Math.random() * 5)),
+        photos: pickSeeded(HOTEL_PHOTOS, 3 + (seed % 2), seed),
+        amenities: pickSeeded(ALL_AMENITIES, 4 + (seed % 5), seed + 3),
         rooms,
         reviews,
-        sla_verified: Math.random() > 0.3,
+        sla_verified: (seed % 10) > 2,
         cancellation_policy: stars >= 4 ? 'Free cancellation up to 48 hours before check-in.' : 'Free cancellation up to 24 hours before check-in. 50% charge for late cancellation.',
-        contact_phone: `+91 ${8000000000 + Math.floor(Math.random() * 999999999)}`,
+        contact_phone: `+91 ${8000000000 + (seed % 999999999)}`,
         contact_email: `reservations@${t.name.toLowerCase().replace(/\s+/g, '')}.com`,
-        base_price: Math.min(...rooms.map(r => r.price_per_night)),
-      });
+        base_price: Math.min(...rooms.map((r) => r.price_per_night)),
+      }));
       hid++;
     }
   }
   return hotels;
 }
 
-const SEED_HOTELS = generateHotels();
+const SQL_CATALOG: Array<{
+  id: string; name: string; city: string; address: string; stars: number;
+  desc: string; amenities: string[]; photos: string[]; price: number; rating: number; reviews: number;
+}> = [
+  { id: 'b1111111-1111-4111-8111-111111111111', name: 'YLT Grand Palace Hotel', city: 'Tirupati', address: 'Alipiri Road, Tirupati', stars: 4, desc: 'SLA-checked stay next to the bus stand with rooftop dining.', amenities: ['WiFi', 'Restaurant', 'Parking', 'AC', 'Room Service'], photos: [HOTEL_PHOTOS[0], ROOM_PHOTOS[0]], price: 2800, rating: 4.5, reviews: 86 },
+  { id: 'b2222222-2222-4222-8222-222222222222', name: 'YLT Business Suites', city: 'Hyderabad', address: 'Road No. 36, Jubilee Hills', stars: 4, desc: 'Modern business hotel with conference rooms and late checkout for night buses.', amenities: ['WiFi', 'Gym', 'Parking', 'AC', 'Business Center'], photos: [HOTEL_PHOTOS[1]], price: 3200, rating: 4.4, reviews: 64 },
+  { id: 'b3333333-3333-4333-8333-333333333333', name: 'YLT City Comfort', city: 'Chennai', address: 'Near CMBT, Koyambedu', stars: 3, desc: 'Clean rooms 200m from the bus terminal. Instant PNR after Razorpay.', amenities: ['WiFi', 'AC', 'Parking', 'Restaurant'], photos: [HOTEL_PHOTOS[2]], price: 1900, rating: 4.2, reviews: 51 },
+  { id: 'b4444444-4444-4444-8444-444444444444', name: 'YLT Heritage Inn', city: 'Bangalore', address: 'Near Kempegowda Bus Station', stars: 3, desc: 'Heritage property beside the stand. Women-safe front desk 24x7.', amenities: ['WiFi', 'Restaurant', 'AC', 'Laundry'], photos: [HOTEL_PHOTOS[3]], price: 2400, rating: 4.3, reviews: 44 },
+  { id: 'b5555555-5555-4555-8555-555555555555', name: 'YLT Temple View Residency', city: 'Tirupati', address: 'Opposite RTC Complex', stars: 3, desc: 'Walk to the RTC stand. Vegetarian kitchen and early checkout for darshan.', amenities: ['WiFi', 'Restaurant', 'AC', 'Parking'], photos: [HOTEL_PHOTOS[4]], price: 2100, rating: 4.35, reviews: 72 },
+  { id: 'b6666666-6666-4666-8666-666666666666', name: 'YLT Lakeside Court', city: 'Vijayawada', address: 'MG Road, Vijayawada', stars: 4, desc: 'Quiet rooms with pool access for overnight Hyderabad–Vijayawada trips.', amenities: ['WiFi', 'Pool', 'Restaurant', 'Parking', 'AC'], photos: [HOTEL_PHOTOS[2]], price: 2600, rating: 4.45, reviews: 38 },
+  { id: 'catalog-temple-view-tirupati', name: 'Temple View Hotel', city: 'Tirupati', address: 'Tirumala Rd, Tirupati', stars: 3, desc: 'Comfortable pilgrim hotel near temple with pure-veg restaurant and pilgrimage assistance.', amenities: ['WiFi', 'Restaurant', 'AC', 'Parking'], photos: [HOTEL_PHOTOS[4]], price: 1500, rating: 4.2, reviews: 98 },
+];
 
+function sqlCatalogHotels(): Hotel[] {
+  return SQL_CATALOG.map((row) => {
+    const rooms = genRooms(row.id, row.price);
+    return asCatalogHotel({
+      id: row.id,
+      name: row.name,
+      city: row.city,
+      address: row.address,
+      stars: row.stars,
+      avg_rating: row.rating,
+      review_count: row.reviews,
+      description: row.desc,
+      photos: row.photos,
+      amenities: row.amenities,
+      rooms,
+      reviews: genReviews(row.id),
+      sla_verified: true,
+      cancellation_policy: 'Free cancellation up to 24 hours before check-in.',
+      contact_phone: '',
+      contact_email: 'reservations@ylttravels.com',
+      base_price: row.price,
+    });
+  });
+}
+
+export function catalogHotels(): Hotel[] {
+  return mergeLiveWithCatalog(generateHotels(), sqlCatalogHotels(), (h) => catalogIdentity(h.name, h.city));
+}
+
+const CATALOG_HOTELS = catalogHotels();
+
+function parseList(v: any): string[] {
+  if (Array.isArray(v)) {
+    return v.map((x) => (typeof x === 'string' ? x : String(x?.url ?? x ?? ''))).map((s) => s.trim()).filter(Boolean);
+  }
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (!t) return [];
+    try {
+      const j = JSON.parse(t);
+      if (Array.isArray(j)) return parseList(j);
+    } catch { /* comma list */ }
+    return t.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function publicMediaUrl(u: string): string {
+  const s = String(u || '').trim();
+  if (!s || s.startsWith('data:')) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('//')) return `https:${s}`;
+  return s.startsWith('/') ? s : `/${s}`;
+}
+
+function mapDbRooms(row: any, photos: string[]): HotelRoom[] {
+  const price = Number(row.price_per_night) || 0;
+  const raw = Array.isArray(row.rooms) ? row.rooms : [];
+  if (raw.length) {
+    return raw.map((r: any, i: number) => ({
+      id: String(r.id || `${row.id}-r${i}`),
+      room_type: String(r.room_type || r.type || 'Standard'),
+      bed_type: String(r.bed_type || 'Double'),
+      max_guests: Number(r.max_guests || r.capacity || 2) || 2,
+      price_per_night: Number(r.rate ?? r.price_per_night ?? price) || price,
+      amenities: parseList(r.amenities),
+      photo: publicMediaUrl(r.photo || r.photo_url || photos[0] || ''),
+      available: !['ooo', 'occupied', 'blocked'].includes(String(r.status || 'vacant')),
+    }));
+  }
+  return [];
+}
+
+function mapDbHotel(row: any): Hotel {
+  const amenities = parseList(row.amenities);
+  const gallery = parseList(row.gallery_urls).map(publicMediaUrl).filter(Boolean);
+  const cover = publicMediaUrl(row.image_url || row.photo || '');
+  const photos = [...(cover ? [cover] : []), ...gallery].filter((u, i, a) => u && a.indexOf(u) === i);
+  const rooms = mapDbRooms(row, photos);
+  const sla = row.sla_verified;
+  return {
+    id: String(row.id),
+    name: String(row.name || 'Hotel'),
+    city: String(row.city || '').trim(),
+    address: String(row.address || row.area || row.city || ''),
+    stars: Number(row.star_rating ?? row.stars ?? 3) || 3,
+    avg_rating: Number(row.rating ?? row.avg_rating ?? 4) || 4,
+    review_count: Number(row.reviews ?? row.review_count ?? 0) || 0,
+    description: String(row.description || ''),
+    photos,
+    amenities,
+    rooms,
+    reviews: [],
+    sla_verified: sla !== 0 && sla !== '0' && sla !== false,
+    cancellation_policy: 'Free cancellation up to 24 hours before check-in.',
+    contact_phone: String(row.contact_phone || ''),
+    contact_email: String(row.contact_email || 'reservations@ylttravels.com'),
+    base_price: Number(row.price_per_night) || rooms[0]?.price_per_night || 0,
+    listing_source: String(row.partner_id || '').trim() ? 'partner' : 'catalog',
+  };
+}
+
+function hotelMergeKey(h: Hotel): string {
+  return catalogIdentity(h.name, h.city);
+}
+
+function mergeHotels(live: Hotel[]): Hotel[] {
+  return mergeLiveWithCatalog(live, CATALOG_HOTELS, hotelMergeKey);
+}
+
+function isoDate(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return isoDate(d);
+}
+
+/** Required stay dates: store values, else today → tomorrow. */
+export function defaultStayDates(checkIn?: string, checkOut?: string) {
+  const today = isoDate();
+  const inn = (checkIn && checkIn >= today) ? checkIn : today;
+  const out = (checkOut && checkOut > inn) ? checkOut : addDaysIso(inn, 1);
+  return { checkIn: inn, checkOut: out };
+}
+
+const stay0 = defaultStayDates();
 const defaultFilters: HotelSearchFilters = {
-  city: '', checkIn: '', checkOut: '', guests: 2,
+  city: '', checkIn: stay0.checkIn, checkOut: stay0.checkOut, guests: 2,
   priceMin: 0, priceMax: 50000, starRatings: [], amenities: [],
   slaOnly: false, sortBy: 'price-low',
 };
@@ -157,18 +324,39 @@ interface HotelState {
   setFilter: <K extends keyof HotelSearchFilters>(key: K, value: HotelSearchFilters[K]) => void;
   setFilters: (f: Partial<HotelSearchFilters>) => void;
   resetFilters: () => void;
-  searchHotels: (overrides?: Partial<HotelSearchFilters>) => void;
+  searchHotels: (overrides?: Partial<HotelSearchFilters>) => Promise<void>;
   getHotel: (id: string) => Hotel | undefined;
+  loadHotel: (id: string) => Promise<Hotel | undefined>;
   createBooking: (data: {
     hotel: Hotel; room: HotelRoom; guest_name: string; guest_email: string;
     guest_phone: string; check_in: string; check_out: string; guests: number;
     special_requests: string; payment_method: string;
   }) => HotelBooking;
+  hydrateFromApi: () => Promise<void>;
+}
+
+function applyHotelFilters(list: Hotel[], f: HotelSearchFilters): Hotel[] {
+  let out = [...list];
+  const city = f.city.trim().toLowerCase();
+  if (city) out = out.filter(h => h.city.toLowerCase().includes(city));
+  if (f.priceMin > 0) out = out.filter(h => h.base_price >= f.priceMin);
+  if (f.priceMax < 50000) out = out.filter(h => h.base_price <= f.priceMax);
+  if (f.starRatings.length) out = out.filter(h => f.starRatings.includes(h.stars));
+  if (f.amenities.length) out = out.filter(h => f.amenities.every(a => h.amenities.includes(a)));
+  if (f.slaOnly) out = out.filter(h => h.sla_verified);
+  if (f.guests > 0) out = out.filter(h => !h.rooms.length || h.rooms.some(r => r.max_guests >= f.guests));
+  switch (f.sortBy) {
+    case 'price-low': out.sort((a, b) => a.base_price - b.base_price); break;
+    case 'price-high': out.sort((a, b) => b.base_price - a.base_price); break;
+    case 'rating': out.sort((a, b) => b.avg_rating - a.avg_rating); break;
+    case 'stars': out.sort((a, b) => b.stars - a.stars); break;
+  }
+  return out;
 }
 
 export const useHotelStore = create<HotelState>((set, get) => ({
-  allHotels: SEED_HOTELS,
-  filtered: SEED_HOTELS,
+  allHotels: CATALOG_HOTELS,
+  filtered: CATALOG_HOTELS,
   filters: { ...defaultFilters },
   loading: false,
 
@@ -176,27 +364,39 @@ export const useHotelStore = create<HotelState>((set, get) => ({
   setFilters: (f) => set((s) => ({ filters: { ...s.filters, ...f } })),
   resetFilters: () => set({ filters: { ...defaultFilters } }),
 
-  searchHotels: (overrides) => {
+  searchHotels: async (overrides) => {
     const f = { ...get().filters, ...overrides };
     set({ filters: f, loading: true });
-    let list = [...get().allHotels];
-    if (f.city) list = list.filter(h => h.city.toLowerCase().includes(f.city.toLowerCase()));
-    if (f.priceMin > 0) list = list.filter(h => h.base_price >= f.priceMin);
-    if (f.priceMax < 50000) list = list.filter(h => h.base_price <= f.priceMax);
-    if (f.starRatings.length) list = list.filter(h => f.starRatings.includes(h.stars));
-    if (f.amenities.length) list = list.filter(h => f.amenities.every(a => h.amenities.includes(a)));
-    if (f.slaOnly) list = list.filter(h => h.sla_verified);
-    if (f.guests > 0) list = list.filter(h => h.rooms.some(r => r.max_guests >= f.guests));
-    switch (f.sortBy) {
-      case 'price-low': list.sort((a, b) => a.base_price - b.base_price); break;
-      case 'price-high': list.sort((a, b) => b.base_price - a.base_price); break;
-      case 'rating': list.sort((a, b) => b.avg_rating - a.avg_rating); break;
-      case 'stars': list.sort((a, b) => b.stars - a.stars); break;
-    }
-    setTimeout(() => set({ filtered: list, loading: false }), 300);
+    await get().hydrateFromApi();
+    set({ filtered: applyHotelFilters(get().allHotels, f), loading: false });
   },
 
   getHotel: (id) => get().allHotels.find(h => h.id === id),
+
+  loadHotel: async (id) => {
+    const existing = get().allHotels.find(h => h.id === id);
+    if (existing) return existing;
+    await get().hydrateFromApi();
+    const fromList = get().allHotels.find(h => h.id === id);
+    if (fromList) return fromList;
+    const fromCatalog = CATALOG_HOTELS.find(h => h.id === id);
+    if (fromCatalog) {
+      set((s) => ({ allHotels: s.allHotels.some(h => h.id === fromCatalog.id) ? s.allHotels : [...s.allHotels, fromCatalog] }));
+      return fromCatalog;
+    }
+    try {
+      const row = await fetchHotelById(id);
+      if (!row?.id) return undefined;
+      const mapped = mapDbHotel(row);
+      set((s) => {
+        const live = s.allHotels.filter((h) => h.listing_source === 'partner' && h.id !== mapped.id);
+        return { allHotels: mergeHotels([mapped, ...live]) };
+      });
+      return mapped;
+    } catch {
+      return undefined;
+    }
+  },
 
   createBooking: (data) => {
     const nights = nightsBetween(data.check_in, data.check_out);
@@ -228,5 +428,16 @@ export const useHotelStore = create<HotelState>((set, get) => ({
       status: 'confirmed',
       created_at: new Date().toISOString().slice(0, 10),
     };
+  },
+
+  hydrateFromApi: async () => {
+    try {
+      const rows = await fetchHotels();
+      const live = rows.map(mapDbHotel);
+      set({ allHotels: mergeHotels(live) });
+    } catch {
+      const prevLive = get().allHotels.filter((h) => h.listing_source === 'partner');
+      set({ allHotels: mergeHotels(prevLive) });
+    }
   },
 }));

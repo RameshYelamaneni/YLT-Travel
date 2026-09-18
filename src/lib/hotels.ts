@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API_BASE_URL ?? '';
+import { apiUrl } from './api';
 
 export interface Hotel {
   id: string;
@@ -38,23 +38,25 @@ export interface HotelBooking {
 }
 
 export async function fetchHotels(city?: string): Promise<Hotel[]> {
-  try {
-    const url = city && city !== 'all' ? `${API}/hotels.php?city=${encodeURIComponent(city)}` : `${API}/hotels.php`;
-    const res = await fetch(url);
-    if (!res.ok) { console.warn('fetchHotels HTTP', res.status); return []; }
-    const data = await res.json();
-    return Array.isArray(data) ? data as Hotel[] : [];
-  } catch (e) {
-    console.warn('fetchHotels error:', e); return [];
-  }
+  const url = city && city !== 'all' ? apiUrl(`/api/hotels?city=${encodeURIComponent(city)}`) : apiUrl('/api/hotels');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`fetchHotels HTTP ${res.status}`);
+  const data = await res.json();
+  if (Array.isArray(data)) return data as Hotel[];
+  if (Array.isArray(data?.hotels)) return data.hotels as Hotel[];
+  if (Array.isArray(data?.data)) return data.data as Hotel[];
+  if (Array.isArray(data?.rows)) return data.rows as Hotel[];
+  return [];
 }
 
 export async function fetchHotelById(id: string): Promise<Hotel | null> {
   try {
-    const res = await fetch(`${API}/hotels.php?id=${encodeURIComponent(id)}`);
+    const res = await fetch(apiUrl(`/api/hotels?id=${encodeURIComponent(id)}`));
     if (!res.ok) { console.warn('fetchHotelById HTTP', res.status); return null; }
     const data = await res.json();
-    return data && data.id ? data as Hotel : null;
+    if (data && data.id) return data as Hotel;
+    if (data?.hotel?.id) return data.hotel as Hotel;
+    return null;
   } catch (e) {
     console.warn('fetchHotelById error:', e); return null;
   }
@@ -62,7 +64,7 @@ export async function fetchHotelById(id: string): Promise<Hotel | null> {
 
 export async function createHotelBooking(b: Omit<HotelBooking, 'id' | 'created_at' | 'status'>): Promise<{ pnr: string | null; error: string | null }> {
   try {
-    const res = await fetch(`${API}/hotel-bookings.php`, {
+    const res = await fetch(apiUrl('/api/bookings'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(b),
@@ -80,7 +82,7 @@ export async function createHotelBooking(b: Omit<HotelBooking, 'id' | 'created_a
 
 export async function subscribeNewsletter(email: string, name?: string, source = 'footer'): Promise<{ error: string | null }> {
   try {
-    const res = await fetch(`${API}/newsletter.php`, {
+    const res = await fetch(apiUrl('/api/newsletter/subscribe'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, name: name ?? null, source }),

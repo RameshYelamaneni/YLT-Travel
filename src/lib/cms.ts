@@ -1,20 +1,19 @@
 import type { Director, AppSettings } from '../types';
-
-const API = import.meta.env.VITE_API_BASE_URL ?? '';
+import { apiUrl, apiFetch } from './api';
 
 export async function fetchDirectors(): Promise<Director[]> {
   try {
-    const res = await fetch(`${API}/directors.php`);
+    const res = await fetch(apiUrl('/api/directors'));
     const rows = await res.json();
     if (!Array.isArray(rows)) return [];
     return rows.map((d: any) => ({
       id: d.id,
-      name: d.full_name,
-      role: d.title,
+      name: d.full_name || d.name,
+      role: d.title || d.role,
       bio: d.bio ?? '',
       image_url: d.image_url,
-      linkedin_url: null,
-      order_index: 0,
+      linkedin_url: d.linkedin_url ?? null,
+      order_index: Number(d.order_index ?? 0),
     }));
   } catch (e) {
     console.warn('fetchDirectors error:', e);
@@ -24,15 +23,16 @@ export async function fetchDirectors(): Promise<Director[]> {
 
 export async function saveDirector(d: Partial<Director> & { id: string }): Promise<{ error: string | null }> {
   try {
-    const res = await fetch(`${API}/directors.php`, {
+    const res = await apiFetch('/api/directors', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: d.id,
         full_name: d.name,
         title: d.role,
         bio: d.bio,
         image_url: d.image_url,
+        linkedin_url: d.linkedin_url,
+        order_index: d.order_index,
       }),
     });
     const data = await res.json();
@@ -45,7 +45,7 @@ export async function saveDirector(d: Partial<Director> & { id: string }): Promi
 
 export async function deleteDirector(id: string): Promise<{ error: string | null }> {
   try {
-    const res = await fetch(`${API}/directors.php?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/directors?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok || data.error) return { error: data.error ?? 'Delete failed.' };
     return { error: null };
@@ -56,7 +56,7 @@ export async function deleteDirector(id: string): Promise<{ error: string | null
 
 export async function fetchSettings(): Promise<AppSettings> {
   try {
-    const res = await fetch(`${API}/app-settings.php`);
+    const res = await fetch(apiUrl('/api/settings'));
     const data = await res.json();
     if (!res.ok || data.error) {
       return { upi_id: 'ylt@upi', whatsapp_number: '919999999999', support_email: 'support@ylt.in', fare_tax_percent: 5 };

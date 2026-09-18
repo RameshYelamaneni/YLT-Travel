@@ -1,7 +1,5 @@
 import { create } from 'zustand';
-
-const API = import.meta.env.VITE_API_BASE_URL ?? '';
-const ERP_ENDPOINT = `${API}/erp.php`;
+import { apiFetch } from '../lib/api';
 
 // ============================================================
 // TYPES — all 10 modules
@@ -360,18 +358,21 @@ export interface ErpApiKey {
 
 async function apiGet(table: string): Promise<any[]> {
   try {
-    const res = await fetch(`${ERP_ENDPOINT}?table=${table}`);
+    const res = await apiFetch(`/api/erp?table=${table}`);
     if (!res.ok) return [];
     const data = await res.json();
-    return Array.isArray(data) ? data : [];
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.rows)) return data.rows;
+    if (Array.isArray(data?.data)) return data.data;
+    if (Array.isArray(data?.items)) return data.items;
+    return [];
   } catch { return []; }
 }
 
 async function apiInsert(table: string, record: Record<string, unknown>): Promise<any | null> {
   try {
-    const res = await fetch(`${ERP_ENDPOINT}?table=${table}`, {
+    const res = await apiFetch(`/api/erp?table=${table}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record),
     });
     if (!res.ok) { console.warn(`insert ${table} failed:`, res.status); return null; }
@@ -381,9 +382,8 @@ async function apiInsert(table: string, record: Record<string, unknown>): Promis
 
 async function apiUpdate(table: string, id: string, patch: Record<string, unknown>): Promise<any | null> {
   try {
-    const res = await fetch(`${ERP_ENDPOINT}?table=${table}&id=${encodeURIComponent(id)}`, {
+    const res = await apiFetch(`/api/erp?table=${table}&id=${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
     if (!res.ok) { console.warn(`update ${table} failed:`, res.status); return null; }
@@ -393,7 +393,7 @@ async function apiUpdate(table: string, id: string, patch: Record<string, unknow
 
 async function apiDelete(table: string, id: string): Promise<boolean> {
   try {
-    const res = await fetch(`${ERP_ENDPOINT}?table=${table}&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await apiFetch(`/api/erp?table=${table}&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
     return res.ok;
   } catch { return false; }
 }
@@ -435,6 +435,7 @@ interface ErpState {
   apiKeys: ErpApiKey[];
 
   loadAll: () => Promise<void>;
+  reload: () => Promise<void>;
   insert: (table: string, record: Record<string, unknown>) => Promise<void>;
   update: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
   remove: (table: string, id: string) => Promise<void>;
@@ -487,7 +488,8 @@ export const useErpStore = create<ErpState>((set, get) => ({
   roles: [], auditLogs: [], apiKeys: [],
 
   loadAll: async () => {
-    if (get().loaded || get().loading) return;
+    if (get().loading) return;
+    if (get().loaded && !get().error) return;
     set({ loading: true, error: null });
     try {
       const tables = Object.keys(TABLE_TO_STATE_KEY);
@@ -498,13 +500,18 @@ export const useErpStore = create<ErpState>((set, get) => ({
         if (key === 'profile') {
           (patch as any)[key] = (results[i][0] as ErpPartnerProfile) ?? null;
         } else {
-          (patch as any)[key] = results[i] ?? [];
+          (patch as any)[key] = Array.isArray(results[i]) ? results[i] : [];
         }
       });
       set(patch);
     } catch (e: any) {
       set({ loading: false, error: e.message });
     }
+  },
+
+  reload: async () => {
+    set({ loaded: false, loading: false, error: null });
+    await get().loadAll();
   },
 
   insert: async (table, record) => {
@@ -515,7 +522,10 @@ export const useErpStore = create<ErpState>((set, get) => ({
     if (key === 'profile') {
       set({ profile: data as ErpPartnerProfile });
     } else {
-      set((s) => ({ [key]: [data, ...((s as any)[key] as any[])] } as any));
+      set((s) => {
+        const prev = Array.isArray((s as any)[key]) ? (s as any)[key] : [];
+        return { [key]: [data, ...prev] } as any;
+      });
     }
   },
 
@@ -527,7 +537,10 @@ export const useErpStore = create<ErpState>((set, get) => ({
     if (key === 'profile') {
       set({ profile: data as ErpPartnerProfile });
     } else {
-      set((s) => ({ [key]: ((s as any)[key] as any[]).map((r: any) => r.id === id ? data : r) } as any));
+      set((s) => {
+        const prev = Array.isArray((s as any)[key]) ? (s as any)[key] : [];
+        return { [key]: prev.map((r: any) => r.id === id ? data : r) } as any;
+      });
     }
   },
 
@@ -536,7 +549,10 @@ export const useErpStore = create<ErpState>((set, get) => ({
     if (!ok) return;
     const key = TABLE_TO_STATE_KEY[table];
     if (!key || key === 'profile') return;
-    set((s) => ({ [key]: ((s as any)[key] as any[]).filter((r: any) => r.id !== id) } as any));
+    set((s) => {
+      const prev = Array.isArray((s as any)[key]) ? (s as any)[key] : [];
+      return { [key]: prev.filter((r: any) => r.id !== id) } as any;
+    });
   },
 
   logAction: async (action, entity, entityId, details = {}) => {
@@ -546,7 +562,7 @@ export const useErpStore = create<ErpState>((set, get) => ({
       details, ip_address: null,
     });
     if (data) {
-      set((s) => ({ auditLogs: [data as ErpAuditLog, ...s.auditLogs].slice(0, 500) }));
+      set((s) => ({ auditLogs: [data as ErpAuditLog, ...(Array.isArray(s.auditLogs) ? s.auditLogs : [])].slice(0, 500) }));
     }
   },
 }));
@@ -554,6 +570,11 @@ export const useErpStore = create<ErpState>((set, get) => ({
 // ============================================================
 // DERIVED ANALYTICS
 // ============================================================
+
+function num(v: unknown): number {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : 0;
+}
 
 export function fleetHealthScore(buses: ErpBus[]): number {
   if (!buses.length) return 100;
@@ -580,9 +601,9 @@ export function routeProfitability(channelSales: ErpChannelSale[], expenses: Erp
   const revByRoute = new Map<string, number>();
   channelSales.forEach((s) => {
     const r = s.route ?? 'Unknown';
-    revByRoute.set(r, (revByRoute.get(r) ?? 0) + s.net_amount);
+    revByRoute.set(r, (revByRoute.get(r) ?? 0) + num(s.net_amount));
   });
-  const totalCost = expenses.reduce((s, e) => s + e.amount, 0);
+  const totalCost = expenses.reduce((s, e) => s + num(e.amount), 0);
   const routeCount = Math.max(1, revByRoute.size);
   const costPerRoute = totalCost / routeCount;
   return Array.from(revByRoute.entries()).map(([route, revenue]) => ({
@@ -594,29 +615,78 @@ export function bookingHeatmap(channelSales: ErpChannelSale[]): { date: string; 
   const map = new Map<string, { count: number; revenue: number }>();
   channelSales.forEach((s) => {
     const e = map.get(s.travel_date) ?? { count: 0, revenue: 0 };
-    e.count += s.seats_sold;
-    e.revenue += s.net_amount;
+    e.count += num(s.seats_sold);
+    e.revenue += num(s.net_amount);
     map.set(s.travel_date, e);
   });
   return Array.from(map.entries()).map(([date, v]) => ({ date, ...v })).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+export function profitForecast(
+  channelSales: ErpChannelSale[],
+  expenses: ErpExpense[],
+  earnings: ErpEarning[],
+  days = 30,
+): {
+  horizonDays: number;
+  predictedRevenue: number;
+  predictedCost: number;
+  predictedProfit: number;
+  predictedMarginPct: number;
+  dailyRevenueRun: number;
+  dailyCostRun: number;
+  confidence: 'low' | 'medium' | 'high';
+  sampleDays: number;
+  dieselShockProfit: number;
+  occupancyUpProfit: number;
+} {
+  const byDate = new Map<string, number>();
+  channelSales.forEach((s) => {
+    byDate.set(s.travel_date, (byDate.get(s.travel_date) ?? 0) + num(s.net_amount));
+  });
+  earnings.forEach((e) => {
+    byDate.set(e.date, (byDate.get(e.date) ?? 0) + num(e.net_amount));
+  });
+  const series = Array.from(byDate.values());
+  const sampleDays = Math.max(1, series.length);
+  const avgRev = series.length ? series.reduce((a, b) => a + b, 0) / series.length : 0;
+  const avgCost = expenses.length ? expenses.reduce((s, e) => s + num(e.amount), 0) / Math.max(14, sampleDays) : avgRev * 0.62;
+  const predictedRevenue = avgRev * days;
+  const predictedCost = avgCost * days;
+  const predictedProfit = predictedRevenue - predictedCost;
+  const predictedMarginPct = predictedRevenue ? (predictedProfit / predictedRevenue) * 100 : 0;
+  const confidence: 'low' | 'medium' | 'high' = sampleDays >= 21 ? 'high' : sampleDays >= 7 ? 'medium' : 'low';
+  return {
+    horizonDays: days,
+    predictedRevenue,
+    predictedCost,
+    predictedProfit,
+    predictedMarginPct,
+    dailyRevenueRun: avgRev,
+    dailyCostRun: avgCost,
+    confidence,
+    sampleDays,
+    dieselShockProfit: predictedRevenue - predictedCost * 1.1,
+    occupancyUpProfit: predictedRevenue * 1.05 - predictedCost,
+  };
+}
+
 export function totalEarnings(earnings: ErpEarning[]): { gross: number; net: number; commission: number; gst: number } {
   return earnings.reduce((s, e) => ({
-    gross: s.gross + e.gross_amount,
-    net: s.net + e.net_amount,
-    commission: s.commission + e.commission_amount,
-    gst: s.gst + e.gst_amount,
+    gross: s.gross + num(e.gross_amount),
+    net: s.net + num(e.net_amount),
+    commission: s.commission + num(e.commission_amount),
+    gst: s.gst + num(e.gst_amount),
   }), { gross: 0, net: 0, commission: 0, gst: 0 });
 }
 
 export function totalExpenses(expenses: ErpExpense[]): number {
-  return expenses.reduce((s, e) => s + e.amount, 0);
+  return expenses.reduce((s, e) => s + num(e.amount), 0);
 }
 
 export function expensesByCategory(expenses: ErpExpense[]): { category: string; total: number }[] {
   const map = new Map<string, number>();
-  expenses.forEach((e) => map.set(e.category, (map.get(e.category) ?? 0) + e.amount));
+  expenses.forEach((e) => map.set(e.category, (map.get(e.category) ?? 0) + num(e.amount)));
   return Array.from(map.entries()).map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
 }
 

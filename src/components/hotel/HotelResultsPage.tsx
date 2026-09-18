@@ -1,12 +1,15 @@
-import { useEffect } from 'react';
-import { ArrowLeft, Star, MapPin, Shield, SortAsc } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ArrowLeft, Star, MapPin, Shield, SortAsc, X, BedDouble, Users } from 'lucide-react';
 import { useHotelStore } from '../../store/hotelStore';
 import { formatINR } from '../../lib/format';
+import type { Hotel } from '../../types-hotel';
 
 export default function HotelResultsPage({ go }: { go: (v: any) => void }) {
   const { filtered, loading, filters, setFilter, searchHotels } = useHotelStore();
+  const [roomsHotel, setRoomsHotel] = useState<Hotel | null>(null);
 
-  useEffect(() => { searchHotels(); }, []);
+  useEffect(() => { void searchHotels(); }, []);
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--bg-page)' }}>
@@ -30,7 +33,7 @@ export default function HotelResultsPage({ go }: { go: (v: any) => void }) {
           </div>
           <div className="flex items-center gap-2">
             <SortAsc className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
-            <select value={filters.sortBy} onChange={e => { setFilter('sortBy', e.target.value as any); searchHotels(); }}
+            <select value={filters.sortBy} onChange={e => { setFilter('sortBy', e.target.value as any); void searchHotels(); }}
               className="rounded-lg border px-3 py-2 text-xs" style={{ backgroundColor: 'var(--bg-surface)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}>
               <option value="price-low">Price: Low to High</option>
               <option value="price-high">Price: High to Low</option>
@@ -62,29 +65,32 @@ export default function HotelResultsPage({ go }: { go: (v: any) => void }) {
           <div className="rounded-xl border py-20 text-center" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-card)' }}>
             <p className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>No hotels found</p>
             <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>Try adjusting your filters or search a different city.</p>
-            <button onClick={() => go({ name: 'hotels' })} className="mt-4 rounded-lg bg-crimson-600 px-5 py-2 text-sm font-medium text-white transition hover:bg-crimson-700">Back to Search</button>
+            <button onClick={() => go({ name: 'hotels' })} className="mt-4 rounded-lg bg-gold-500 px-5 py-2 text-sm font-medium text-navy-950 transition hover:bg-gold-400">Back to Search</button>
           </div>
         )}
 
         {!loading && (
           <div className="space-y-4">
             {filtered.map(h => (
-              <button key={h.id} onClick={() => go({ name: 'hotelDetails', hotelId: h.id })}
+              <div key={h.id}
                 className="group flex w-full flex-col overflow-hidden rounded-xl border text-left transition hover:border-crimson-500/30 hover:shadow-lg sm:flex-row"
                 style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-card)' }}>
-                <div className="relative h-48 w-full shrink-0 overflow-hidden sm:h-auto sm:w-56">
-                  <img src={h.photos[0]} alt={h.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                <button type="button" onClick={() => go({ name: 'hotelDetails', hotelId: h.id })} className="relative h-48 w-full shrink-0 overflow-hidden sm:h-auto sm:w-56">
+                  <img src={h.photos[0] || ''} alt={h.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
                   {h.sla_verified && (
                     <span className="absolute left-2 top-2 flex items-center gap-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-bold text-white">
                       <Shield className="h-3 w-3" />SLA
                     </span>
                   )}
-                </div>
+                </button>
                 <div className="flex flex-1 flex-col justify-between p-4">
                   <div>
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <h3 className="font-display text-base font-bold" style={{ color: 'var(--text-primary)' }}>{h.name}</h3>
+                        {h.listing_source === 'catalog' && (
+                          <span className="mt-1 inline-flex rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">Catalog</span>
+                        )}
                         <p className="mt-0.5 flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                           <MapPin className="h-3 w-3" />{h.city} &middot; {h.address}
                         </p>
@@ -109,17 +115,58 @@ export default function HotelResultsPage({ go }: { go: (v: any) => void }) {
                   </div>
                   <div className="mt-3 flex items-end justify-between border-t pt-3" style={{ borderColor: 'var(--border)' }}>
                     <div>
-                      <span className="text-lg font-bold text-crimson-500">{formatINR(h.base_price)}</span>
+                      <span className="text-lg font-bold text-navy-800">{formatINR(h.base_price)}</span>
                       <span className="text-xs" style={{ color: 'var(--text-muted)' }}> /night</span>
                     </div>
-                    <span className="rounded-lg bg-crimson-600/10 px-3 py-1.5 text-xs font-semibold text-crimson-500 transition group-hover:bg-crimson-600 group-hover:text-white">View Rooms</span>
+                    <button type="button" onClick={() => setRoomsHotel(h)}
+                      className="rounded-lg bg-gold-500/10 px-3 py-1.5 text-xs font-semibold text-navy-800 transition hover:bg-gold-500 hover:text-white">View Rooms</button>
                   </div>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
       </div>
+      {roomsHotel && createPortal(
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6">
+          <button className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" aria-hidden />
+          <div className="relative max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-[var(--bg-page)] shadow-2xl animate-scale-in sm:rounded-3xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-[var(--bg-surface)] px-4 py-3" style={{ borderColor: 'var(--border)' }}>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-crimson-600">Select a room</p>
+                <p className="font-display text-base font-bold" style={{ color: 'var(--text-primary)' }}>{roomsHotel.name}</p>
+              </div>
+              <button onClick={() => setRoomsHotel(null)} className="rounded-full border p-1.5" style={{ borderColor: 'var(--border)' }} aria-label="Close"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-3 p-4">
+              {roomsHotel.rooms.map((room) => (
+                <div key={room.id} className="flex gap-3 overflow-hidden rounded-xl border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-card)' }}>
+                  <img src={room.photo} alt={room.room_type} className="h-28 w-28 object-cover" />
+                  <div className="flex flex-1 items-center justify-between gap-3 p-3">
+                    <div>
+                      <p className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{room.room_type}</p>
+                      <p className="mt-0.5 flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        <span className="flex items-center gap-1"><BedDouble className="h-3 w-3" />{room.bed_type}</span>
+                        <span className="flex items-center gap-1"><Users className="h-3 w-3" />Max {room.max_guests}</span>
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-base font-bold text-navy-800">{formatINR(room.price_per_night)}</p>
+                      {room.available ? (
+                        <button onClick={() => { setRoomsHotel(null); go({ name: 'hotelCheckout', hotelId: roomsHotel.id, roomId: room.id }); }}
+                          className="mt-2 rounded-lg bg-gold-500 px-3 py-1.5 text-xs font-semibold text-navy-950">Book</button>
+                      ) : (
+                        <span className="mt-2 inline-block text-xs font-semibold text-red-400">Sold out</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

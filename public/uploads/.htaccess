@@ -1,0 +1,25 @@
+# Partner media. Serve jpg/png/webp only. Never execute scripts here.
+Options -Indexes -ExecCGI
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_php8.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_authz_core.c>
+  <FilesMatch "(?i)\.(php|phtml|php3|php4|php5|phar|cgi|pl|shtml|asp|aspx)$">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+  <FilesMatch "(?i)\.(php|phtml|php3|php4|php5|phar|cgi|pl|shtml|asp|aspx)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>
+AddType image/jpeg .jpg .jpeg
+AddType image/png .png
+AddType image/webp .webp

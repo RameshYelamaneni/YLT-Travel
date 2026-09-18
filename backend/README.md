@@ -1,66 +1,72 @@
-# YLT Travels — Transit OS Backend
+# YLT Travels Go API (`ylt-api`)
 
-Complete Go backend replacing all PHP endpoints from ylttravels.com.
+This process is the live JSON API. PHP is not sufficient for millions of users
+and is not the production architecture.
 
-## Architecture
+Static frontend goes on Hostinger `public_html`. Reverse-proxy `/api` to this
+binary on `127.0.0.1:8080`. Shared Hostinger cannot run Go — use a VPS.
 
-```
-cmd/server/main.go              # entry point: init pool, JWT, all deps, routes
-internal/
-  config/config.go               # env-based configuration (no hardcoded secrets)
-  models/models.go               # domain structs for all modules
-  repositories/                   # data-access layer (QueryContext, sql.Null*)
-    auth_settings.go             # auth, users, employees, partners, OTP, settings, email templates
-    bookings_etc.go              # bookings, directors, offers, routes, payments, newsletter
-    hotels_files_erp.go          # hotels, hotel_bookings, employee_files, generic ERP CRUD
-  services/                      # business logic layer
-    auth_service.go              # signup, signin, OTP, password reset, employee/partner mgmt
-    modules_service.go           # bookings, hotels, directors, offers, routes, payments, etc.
-  handlers/                      # thin Gin handlers (validate → call service → JSON)
-    auth_handler.go              # /auth/* routes
-    modules_handler.go           # /bookings, /directors, /offers, /routes, /payments, etc.
-    bus_erp_handler.go           # /bus/search, /bus/lock-seat, /erp/dashboard/sync
-    helpers.go                   # shared handler helpers
-pkg/
-  db/db.go                       # singleton *sql.DB pool (MaxOpenConns=80)
-  auth/auth.go                   # JWT issuance, verification, Gin middleware (RBAC)
-  email/email.go                 # SMTP sender + template renderer
-  upload/upload.go               # multipart file upload to local disk
-  gds/aggregator.go              # GDS Strategy Pattern + concurrent search
-  seatlock/manager.go            # in-memory concurrency-safe seat lock manager
-  erp/dashboard.go               # concurrent ERP dashboard loader (goroutine fan-out)
-```
-
-## Endpoint Map (PHP → Go)
-
-| PHP endpoint | Go route |
-|---|---|
-| auth.php | `/api/v1/auth/*` (signup, signin, OTP, admin, agent, employees, partners) |
-| bookings.php | `/api/v1/bookings` |
-| directors.php | `/api/v1/directors` |
-| erp.php | `/api/v1/erp/table/:table` (generic CRUD, 26 whitelisted tables) |
-| app-settings.php | `/api/v1/settings` |
-| email-templates.php | `/api/v1/email-templates` |
-| hotels.php | `/api/v1/hotels` |
-| hotel-bookings.php | `/api/v1/hotel-bookings` |
-| newsletter.php | `/api/v1/newsletter` |
-| offers.php | `/api/v1/offers` |
-| payments.php | `/api/v1/payments` |
-| routes.php | `/api/v1/routes` |
-| employee_files | `/api/v1/employees/files` |
-
-## Key performance properties
-
-- **Bounded connection pool** (`pkg/db`): `MaxOpenConns=80` caps simultaneous DB sessions.
-- **Concurrent GDS search** (`pkg/gds`): goroutines + channels, partial-failure tolerant.
-- **In-memory seat locks** (`pkg/seatlock`): RWMutex-protected, 10-min TTL, background reaper.
-- **Single multiplexed dashboard** (`pkg/erp`): one endpoint replaces 26 calls.
-- **JWT auth** (`pkg/auth`): stateless HS256 access tokens, role-based middleware.
-- **Context-aware queries**: all DB calls use `QueryContext`/`ExecContext`.
-
-## Run
+## Build
 
 ```bash
-cp .env.template .env  # fill in real values
-go run ./cmd/server
+cd backend
+go build -o ylt-api ./cmd/server
 ```
+
+## MySQL DSN (Hostinger official Go format)
+
+`ylt-api` prefers **`DATABASE_URL`**, then **`MYSQL_DSN`**, then localhost
+fallbacks. Set this in **hPanel** and **restart the Go app**.
+
+```
+u377962510_admin:PASSWORD@tcp(localhost:3306)/u377962510_YLT_Travels?parseTime=true
+```
+
+If the password contains `@`, encode it as `%40` (example: `p@ss` → `p%40ss`).
+Add `&multiStatements=true&charset=utf8mb4`. Never put this in Vite / the browser.
+
+```bash
+export DATABASE_URL='u377962510_admin:YOUR_PASSWORD@tcp(localhost:3306)/u377962510_YLT_Travels?parseTime=true&multiStatements=true&charset=utf8mb4'
+export PORT=8080
+export CORS_ORIGIN='*'
+export CORE_ADMIN_USER=CoreAdmin
+export CORE_ADMIN_PASS='YOUR_PASSWORD'
+export JWT_SECRET='ylt-travels-hostinger-secret-change-me-2026'
+./ylt-api
+```
+
+The process binds `0.0.0.0:8080`, opens `sql.Open("mysql", dsn)`, `Ping`s, and
+uses a bounded pool (`DB_MAX_OPEN_CONNS=80`). If `DATABASE_URL` / `MYSQL_DSN`
+are unset, it tries `localhost`, `127.0.0.1`, and `auth-db1833.hstgr.io` with
+the encoded password.
+
+## Install schema (once)
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/install
+```
+
+Login: **CoreAdmin** with `CORE_ADMIN_PASS` (same password you set for the DB).
+Email OTP via SMTP. Set `OTP_DEV=1` only on a local machine. Agent
+**agent@ylt.local** / **agent123**.
+
+## Reverse proxy
+
+Nginx:
+
+```
+location /api/ {
+    proxy_pass http://127.0.0.1:8080;
+}
+```
+
+Leave `public/config.js` and `VITE_API_BASE_URL` empty so the SPA calls
+same-origin `/api`. `api.ylttravels.com` is NXDOMAIN until you point DNS at
+this process.
+
+## Routes
+
+`/api/health`, `/api/install`, `/api/auth/otp/send`, `/api/auth/otp/verify`,
+`/api/auth/signin`, `/api/auth/signup`, `/api/auth/admin-signin`,
+`/api/auth/agent-signin`, `/api/auth/me`, partners, employees, bookings,
+hotel-bookings, erp, settings, directors, payments, hotels.

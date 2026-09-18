@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,10 +18,12 @@ import (
 
 	"github.com/ylttravels/transit-os/backend/internal/config"
 	"github.com/ylttravels/transit-os/backend/internal/handlers"
+	"github.com/ylttravels/transit-os/backend/internal/migrate"
 	"github.com/ylttravels/transit-os/backend/internal/repositories"
 	"github.com/ylttravels/transit-os/backend/internal/services"
 	"github.com/ylttravels/transit-os/backend/pkg/auth"
 	"github.com/ylttravels/transit-os/backend/pkg/db"
+	"github.com/ylttravels/transit-os/backend/pkg/email"
 	"github.com/ylttravels/transit-os/backend/pkg/gds"
 	"github.com/ylttravels/transit-os/backend/pkg/seatlock"
 	"github.com/ylttravels/transit-os/backend/pkg/upload"
@@ -30,12 +33,13 @@ func main() {
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	// Load .env file for local development (silently ignored if not present)
+	// Load .env from cwd or backend/ (silently ignored if not present)
 	_ = godotenv.Load()
+	_ = godotenv.Load("backend/.env")
 	cfg := config.Load()
 
 	// 1. DB pool.
-	rootCtx, rootCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	rootCtx, rootCancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer rootCancel()
 	if err := db.Init(rootCtx, cfg); err != nil {
 		log.Fatalf("db init failed: %v", err)
@@ -76,7 +80,16 @@ func main() {
 	erpCrudRepo := repositories.NewErpCrudRepo(pool)
 
 	// 7. Services.
-	authSvc := services.NewAuthService(authRepo, emailTmplRepo, jwtMgr, settingsRepo)
+	authSvc := services.NewAuthService(authRepo, emailTmplRepo, jwtMgr, settingsRepo, cfg.OTPDev, email.SMTPConfig{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		User:     cfg.SMTPUser,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+		FromName: "YLT Travels",
+		Secure:   cfg.SMTPSecure,
+	})
+	_ = migrate.EnsureOTPHashColumn(context.Background(), pool)
 	bookingSvc := services.NewBookingService(bookingRepo)
 	hotelBookingSvc := services.NewHotelBookingService(hotelBookingRepo)
 	directorSvc := services.NewDirectorService(directorRepo)
@@ -119,14 +132,24 @@ func main() {
 	handlers.NewSeatLockHandler(locks).Register(v1)
 	handlers.NewDashboardHandler().Register(v1)
 
+	site := handlers.NewSiteAPI(cfg, pool, authSvc, jwtMgr, bookingSvc, hotelBookingSvc, erpCrudSvc, directorSvc, settingsRepo, authRepo)
+	api := e.Group("/api")
+	site.Register(api)
+	handlers.NewOfferHandler(offerSvc).Register(api)
+	handlers.NewHotelHandler(hotelSvc).Register(api)
+	handlers.NewNewsletterHandler(newsletterSvc).Register(api)
+	handlers.NewPaymentHandler(paymentSvc).Register(api)
+	handlers.NewEmailTemplateHandler(emailTmplSvc).Register(api)
+	handlers.NewEmployeeFileHandler(empFileSvc, uploadMgr).Register(api)
+
 	// 10. Graceful shutdown.
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              "0.0.0.0:" + cfg.Port,
 		Handler:           e,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
-		log.Printf("transit-os backend listening on :%s", cfg.Port)
+		log.Printf("ylt-api listening on 0.0.0.0:%s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
 		}
@@ -145,10 +168,21 @@ func main() {
 	log.Println("backend stopped")
 }
 
-// corsMiddleware sets permissive CORS headers. Tighten origins before production.
+// corsMiddleware allows ylttravels.com, localhost, and any CORS_ORIGIN list.
 func corsMiddleware(origin string) gin.HandlerFunc {
+	allowed := strings.Split(origin, ",")
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", origin)
+		reqOrigin := c.GetHeader("Origin")
+		allow := "*"
+		if corsOriginOK(reqOrigin, allowed) {
+			if reqOrigin != "" {
+				allow = reqOrigin
+			}
+		} else if strings.TrimSpace(origin) != "*" && len(allowed) > 0 {
+			allow = strings.TrimSpace(allowed[0])
+		}
+		c.Header("Vary", "Origin")
+		c.Header("Access-Control-Allow-Origin", allow)
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Client-Info, Apikey")
 		if c.Request.Method == http.MethodOptions {
@@ -157,4 +191,25 @@ func corsMiddleware(origin string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func corsOriginOK(reqOrigin string, configured []string) bool {
+	if reqOrigin == "" {
+		return true
+	}
+	lower := strings.ToLower(reqOrigin)
+	if strings.HasPrefix(lower, "http://localhost:") || strings.HasPrefix(lower, "http://127.0.0.1:") {
+		return true
+	}
+	if lower == "https://ylttravels.com" || lower == "https://www.ylttravels.com" ||
+		lower == "http://ylttravels.com" || lower == "http://www.ylttravels.com" {
+		return true
+	}
+	for _, a := range configured {
+		a = strings.TrimSpace(a)
+		if a == "*" || (a != "" && a == reqOrigin) {
+			return true
+		}
+	}
+	return false
 }
