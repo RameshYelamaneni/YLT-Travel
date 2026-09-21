@@ -347,6 +347,41 @@ export function stopDateLabel(bus: Bus, stop: RouteStop, kind: 'boarding' | 'dro
   return new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
+export function isNightService(bus: Bus) {
+  const h = Number(bus.departure_time.slice(0, 2));
+  return h < 6 || h >= 21 || bus.night_crew;
+}
+
+export function refundPreview(bus: Bus): { headline: string; detail: string } {
+  const { slabs, notes } = cancellationSlabs(bus);
+  const best = slabs.reduce((a, b) => (a.pct >= b.pct ? a : b), slabs[0]);
+  return {
+    headline: best.pct > 0 ? `Up to ${best.pct}% back if you cancel in time` : 'Non-refundable listed fare',
+    detail: `${best.when} · ${best.refundLabel}. ${notes[0]}`,
+  };
+}
+
+export function weeklyDelaySeries(bus: Bus): { date: string; label: string; delayed: boolean; delayPct: number }[] {
+  const delayPct = Math.max(4, Math.min(28, 100 - bus.punctuality));
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = shiftIsoDate(bus.date, i - 6);
+    const delayed = (bus.id.charCodeAt(i % bus.id.length) + i) % 10 < delayPct / 10;
+    return {
+      date,
+      label: new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric' }),
+      delayed,
+      delayPct,
+    };
+  });
+}
+
+export const YLT_TRUST_CHIPS = [
+  { id: 'driver', label: 'Assigned driver', detail: 'Duty crew shown on the seat map' },
+  { id: 'lastmile', label: 'Last-mile cars', detail: 'Pickup or drop after the bus' },
+  { id: 'packages', label: 'Tirumala packages', detail: 'Bus + hotel in one booking' },
+  { id: 'session', label: '30-min auto logout', detail: 'Idle sessions end on this device' },
+] as const;
+
 export const TRAVEL_POLICY = [
   {
     q: 'Do I need to buy a ticket for my child?',

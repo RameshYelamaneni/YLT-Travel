@@ -106,6 +106,42 @@ function stopsFor(city: string, time: string, rand: () => number, boarding: bool
   }));
 }
 
+const REST_CORRIDOR: Record<string, { name: string; note: string; halt: number }[]> = {
+  'Hyderabad|Bengaluru': [
+    { name: 'Kurnool highway kitchen', note: 'Dinner / tea halt', halt: 20 },
+    { name: 'Anantapur rest bay', note: 'Washroom + snacks', halt: 15 },
+    { name: 'Hosur tea halt', note: 'Last stretch before Bengaluru', halt: 12 },
+  ],
+  'Bengaluru|Hyderabad': [
+    { name: 'Hosur tea halt', note: 'First stretch after Bengaluru', halt: 12 },
+    { name: 'Anantapur rest bay', note: 'Washroom + snacks', halt: 15 },
+    { name: 'Kurnool highway kitchen', note: 'Breakfast / tea halt', halt: 20 },
+  ],
+};
+
+export function restStopsFor(from: string, to: string, departure: string, durationMins: number, via: string[], rand: () => number): RouteStop[] {
+  const key = `${from}|${to}`;
+  const corridor = REST_CORRIDOR[key];
+  if (corridor) {
+    const n = durationMins >= 480 ? 3 : 2;
+    return corridor.slice(0, n).map((stop, i) => ({
+      name: stop.name,
+      time: addMins(departure, Math.round(durationMins * ((i + 1) / (n + 1)))),
+      halt_mins: stop.halt,
+      note: stop.note,
+    }));
+  }
+  if (durationMins < 210 && via.length === 0) return [];
+  const cities = via.length ? via : [`En-route halt`];
+  const n = Math.min(3, Math.max(2, cities.length));
+  return cities.slice(0, n).map((name, i) => ({
+    name: `${name} rest stop`,
+    time: addMins(departure, Math.round(durationMins * ((i + 1) / (n + 1)))),
+    halt_mins: 12 + Math.floor(rand() * 10),
+    note: 'Washroom + tea',
+  }));
+}
+
 export function generateBuses(from: string, to: string, date: string): Bus[] {
   const rand = seededRand((from + to + date).split('').reduce((a, c) => a + c.charCodeAt(0), 0));
   const count = 16 + Math.floor(rand() * 6);
@@ -142,7 +178,7 @@ export function generateBuses(from: string, to: string, date: string): Bus[] {
       is_volvo: op.volvo,
       live_tracking: rand() > 0.28,
       sla_verified: rand() > 0.35,
-      women_safety: rand() > 0.45,
+      women_safety: inSlot(departure_time, 0, 6) || inSlot(departure_time, 21, 24) || rand() > 0.45,
       amenities: AMENITIES.filter(() => rand() > 0.42).slice(0, 5),
       from,
       to,
@@ -155,6 +191,7 @@ export function generateBuses(from: string, to: string, date: string): Bus[] {
       window_seats: Math.max(1, Math.floor(seats_available * 0.4)),
       boarding_points: stopsFor(from, departure_time, rand, true),
       dropping_points: stopsFor(to, arrival_time, rand, false),
+      rest_stops: restStopsFor(from, to, departure_time, dur, via, rand),
       cancellation: (['free-until-6h', 'partial', 'non-refundable'] as CancellationPolicy[])[Math.floor(rand() * 3)],
       rest_stop_rating: 3.5 + rand() * 1.5,
       delay_mins: rand() > 0.78 ? Math.floor(8 + rand() * 35) : 0,
@@ -163,7 +200,7 @@ export function generateBuses(from: string, to: string, date: string): Bus[] {
       punctuality: Math.round(78 + rand() * 21),
       meals: rand() > 0.55,
       accessible: rand() > 0.72,
-      night_crew: rand() > 0.4,
+      night_crew: inSlot(departure_time, 0, 6) || inSlot(departure_time, 21, 24) || rand() > 0.4,
       delay_guarantee: rand() > 0.5,
       prime: rand() > 0.7,
       insurance_available: true,

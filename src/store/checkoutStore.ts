@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 export interface CheckoutItem {
-  type: 'bus' | 'car' | 'carpool' | 'lastmile';
+  type: 'bus' | 'car' | 'carpool' | 'lastmile' | 'hotel' | 'package';
   label: string;
   amount: number;
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Accessibility, BadgeCheck, Bath, Bus as BusIcon, Camera, CheckCircle2, ChevronLeft, ChevronRight, Copy,
-  DoorOpen, Droplets, HeartPulse, Lamp, Layers, MapPin, Moon, Plug, Radio, ShieldCheck,
+  Coffee, DoorOpen, Droplets, HeartPulse, Hotel, Lamp, Layers, MapPin, Moon, Plug, Radio, ShieldCheck,
   Snowflake, Star, Usb, Utensils, Wifi, X, UserRound,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -12,16 +12,21 @@ import { fetchOffers, type YltOffer } from '../lib/offers';
 import {
   TRAVEL_POLICY,
   cancellationSlabs,
+  isNightService,
   ratingHistogram,
   ratingLabel,
+  refundPreview,
   runningDays,
   safetyItems,
   stopDateLabel,
   travellerTags,
   tripAmenities,
   tripOffers,
+  weeklyDelaySeries,
   type BusDetailsTab,
 } from '../lib/busInsights';
+import { tripBundlesFor } from '../data/tripBundles';
+import { useNav } from '../store/nav';
 
 export type { BusDetailsTab };
 
@@ -200,6 +205,13 @@ export default function BusDetailsSheet({
   const cancel = cancellationSlabs(bus);
   const amenities = tripAmenities(bus);
   const drops = moreDrop ? bus.dropping_points : bus.dropping_points.slice(0, 3);
+  const night = isNightService(bus);
+  const preview = refundPreview(bus);
+  const rests = bus.rest_stops ?? [];
+  const bundles = tripBundlesFor(bus);
+  const delayWeek = weeklyDelaySeries(bus);
+  const delayPct = delayWeek[0]?.delayPct ?? Math.max(4, 100 - bus.punctuality);
+  const { go } = useNav();
 
   function setSectionEl(id: BusDetailsTab) {
     return (el: HTMLElement | null) => { sectionRefs.current[id] = el; };
@@ -232,6 +244,15 @@ export default function BusDetailsSheet({
             {(bus.sla_verified || bus.women_safety) && <span className="ylt-result-chip ylt-result-chip--trust"><BadgeCheck className="h-3 w-3" /> YLT Safe</span>}
             {bus.rating >= 4.5 && <span className="ylt-result-chip ylt-result-chip--offer"><Star className="h-3 w-3" /> Most trusted</span>}
           </div>
+          <button
+            type="button"
+            onClick={() => goTo('cancellation')}
+            className="mt-3 w-full rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-left"
+          >
+            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Refund before you pay</p>
+            <p className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{preview.headline}</p>
+            <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{preview.detail}</p>
+          </button>
         </header>
 
         <div className="relative shrink-0 border-b" style={{ borderColor: 'var(--border)' }}>
@@ -284,6 +305,20 @@ export default function BusDetailsSheet({
                   <BusIcon className="h-14 w-14 text-crimson-500/70" />
                 </div>
               </section>
+
+              {night && (
+                <section className="rounded-2xl border border-violet-400/30 bg-violet-500/10 p-4">
+                  <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-violet-700">
+                    <Moon className="h-3.5 w-3.5" /> Women / night safety
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    {bus.night_crew && <li>• Night crew listed on this service (driver + attendant).</li>}
+                    {bus.ladies_seats > 0 && <li>• {bus.ladies_seats} ladies-quota seats are marked rose on the seat map.</li>}
+                    {(bus.women_safety || bus.sla_verified) && <li>• YLT Safe checks apply to this listing.</li>}
+                    <li>• Sit in ladies quota if you prefer. GPS tracking starts after boarding.</li>
+                  </ul>
+                </section>
+              )}
 
               {(bus.driverName || bus.listing_source === 'catalog') && (
                 <section className="rounded-2xl border p-4" style={{ borderColor: 'var(--border)' }}>
@@ -361,7 +396,36 @@ export default function BusDetailsSheet({
                     </li>
                   ))}
                 </ol>
+                <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {bus.punctuality}% on-time on this listing · last 7 days delayed about {delayPct}% of trips (catalog sample).
+                </p>
               </section>
+
+              {bundles.length > 0 && (
+                <section className="rounded-2xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                  <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-crimson-600">
+                    <Hotel className="h-3.5 w-3.5" /> Bus + stay
+                  </p>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Add a Tirupati / en-route hotel or Tirumala package after the bus.</p>
+                  <div className="mt-3 space-y-2">
+                    {bundles.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => { onClose(); go(b.hrefView); }}
+                        className="flex w-full items-start justify-between gap-2 rounded-xl border px-3 py-2 text-left"
+                        style={{ borderColor: 'var(--border)' }}
+                      >
+                        <span>
+                          <span className="block text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{b.title}</span>
+                          <span className="mt-0.5 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>{b.detail}</span>
+                        </span>
+                        <span className="shrink-0 text-right text-xs font-bold text-crimson-600">{formatINR(b.price)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
             </section>
 
             <section id="ylt-details-ratings" ref={setSectionEl('ratings')} className="space-y-4 scroll-mt-2">
@@ -448,6 +512,32 @@ export default function BusDetailsSheet({
             </section>
 
             <section id="ylt-details-boarding" ref={setSectionEl('boarding')} className="space-y-6 scroll-mt-2">
+              {rests.length > 0 && (
+                <section>
+                  <h3 className="flex items-center gap-1.5 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    <Coffee className="h-4 w-4 text-crimson-600" /> Rest stops
+                  </h3>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Catalog sample halts on this corridor — times can shift with traffic.</p>
+                  <ol className="mt-3 space-y-3">
+                    {rests.map((stop, i) => (
+                      <li key={`${stop.name}-${stop.time}`} className="grid grid-cols-[3.4rem_0.9rem_minmax(0,1fr)] items-start gap-x-2">
+                        <div className="text-right">
+                          <p className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>{stop.time}</p>
+                          {stop.halt_mins ? <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{stop.halt_mins} min</p> : null}
+                        </div>
+                        <div className="relative flex h-full justify-center pt-1.5">
+                          {i < rests.length - 1 && <span className="absolute top-4 bottom-[-0.85rem] w-px" style={{ backgroundColor: 'var(--border)' }} />}
+                          <span className="relative z-10 h-2.5 w-2.5 rounded-full border-2 border-amber-500 bg-[var(--bg-surface)]" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{stop.name}</p>
+                          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{stop.note || 'Washroom + tea halt'}</p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
               <StopTimeline title="Boarding points" items={bus.boarding_points} bus={bus} kind="boarding" />
               <div>
                 <StopTimeline title="Dropping points" items={drops} bus={bus} kind="dropping" />

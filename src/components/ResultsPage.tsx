@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom';
 import {
   Star, ArrowRight, MapPin,
   ArrowLeft, SlidersHorizontal, Users, GitCompare,
-  Clock, X, Sparkles, ChevronDown,
+  Clock, X, Sparkles, ChevronDown, UserRound, Navigation, Package, TimerReset, Hotel, Timer,
 } from 'lucide-react';
 import type { Bus, Seat } from '../types';
 import type { View } from '../store/nav';
-import { generateSeats, generateBuses, inSlot, TIME_SLOTS, catalogCrewFor } from '../data/buses';
+import { generateSeats, generateBuses, inSlot, TIME_SLOTS, catalogCrewFor, restStopsFor, seededRand } from '../data/buses';
 import { formatINR, formatDateLong, formatTime12, formatDuration } from '../lib/format';
 import { type LastMileCar } from '../data/mockCars';
 import SearchWidget from './SearchWidget';
@@ -27,6 +27,9 @@ import { busCatalogIdentity, mergeLiveWithCatalog } from '../lib/publicCatalog';
 import { useAccountPrefs } from '../store/accountPrefs';
 import BusResultChips from './BusResultChips';
 import BusDetailsSheet, { type BusDetailsTab } from './BusDetailsSheet';
+import { YLT_TRUST_CHIPS } from '../lib/busInsights';
+import { tripBundlesFor, type TripBundle } from '../data/tripBundles';
+import { clearFareHold, formatHoldClock, getFareHold, remainingHoldMs, startFareHold } from '../lib/fareLock';
 
 interface Props {
   from: string;
@@ -66,6 +69,12 @@ function mapPublicBus(row: any): Bus {
   })).filter((s: Seat) => s.id) : undefined;
   const boarding = Array.isArray(row?.boarding_points) ? row.boarding_points.map((p: any) => ({ name: String(p.name || p), time: String(p.time || '') })) : [];
   const dropping = Array.isArray(row?.dropping_points) ? row.dropping_points.map((p: any) => ({ name: String(p.name || p), time: String(p.time || '') })) : [];
+  const restStops = Array.isArray(row?.rest_stops) ? row.rest_stops.map((p: any) => ({
+    name: String(p.name || p),
+    time: String(p.time || ''),
+    halt_mins: p.halt_mins != null ? Number(p.halt_mins) : undefined,
+    note: p.note ? String(p.note) : undefined,
+  })) : undefined;
   const mapped: Bus = {
     id: String(row?.id || row?.schedule_id || ''),
     fleet_bus_id: String(row?.fleet_bus_id || row?.bus_id || ''),
@@ -98,6 +107,7 @@ function mapPublicBus(row: any): Bus {
     window_seats: Number(row?.window_seats || 0),
     boarding_points: boarding,
     dropping_points: dropping,
+    rest_stops: restStops && restStops.length ? restStops : undefined,
     cancellation: (row?.cancellation === 'free-until-6h' || row?.cancellation === 'non-refundable' ? row.cancellation : 'partial') as Bus['cancellation'],
     rest_stop_rating: Number(row?.rest_stop_rating || 0),
     delay_mins: Number(row?.delay_mins || 0),
@@ -125,6 +135,10 @@ function mapPublicBus(row: any): Bus {
     mapped.driverPhoto = crew.driverPhoto;
     mapped.experienceYears = crew.experienceYears;
     mapped.conductorName = crew.conductorName;
+  }
+  if (!mapped.rest_stops?.length && mapped.from && mapped.to && mapped.departure_time) {
+    const rand = seededRand(mapped.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0));
+    mapped.rest_stops = restStopsFor(mapped.from, mapped.to, mapped.departure_time, mapped.duration_mins || 360, mapped.via, rand);
   }
   return mapped;
 }
@@ -475,6 +489,17 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
               </div>
             </div>
 
+            <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1" aria-label="Why book with YLT">
+              {YLT_TRUST_CHIPS.map((chip) => {
+                const Icon = chip.id === 'driver' ? UserRound : chip.id === 'lastmile' ? Navigation : chip.id === 'packages' ? Package : TimerReset;
+                return (
+                  <span key={chip.id} title={chip.detail} className="ylt-result-chip ylt-result-chip--trust shrink-0">
+                    <Icon className="h-3 w-3" /> {chip.label}
+                  </span>
+                );
+              })}
+            </div>
+
             <div className="mt-3 overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-surface)' }}>
             <div className="min-w-0 overflow-hidden px-3 py-2">
               <p className="mb-1.5 text-[11px] font-semibold" style={{ color: 'var(--text-secondary)' }}>Boarding points</p>
@@ -738,13 +763,17 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
   const [confirmed, setConfirmed] = useState(false);
   const [booking, setBooking] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [holdMs, setHoldMs] = useState(0);
+  const [bundle, setBundle] = useState<TripBundle | null>(null);
+  const stayOffers = useMemo(() => tripBundlesFor(bus), [bus]);
 
   const MAX = 4;
   const selectedSeats = selected.map((id) => seats.find((s) => s.id === id)!).filter(Boolean);
   const seatTotal = selectedSeats.reduce((s, x) => s + x.price, 0);
 
   const carFare = lastMile.fare;
-  const subtotal = seatTotal + carFare;
+  const bundleFare = bundle ? bundle.price : 0;
+  const subtotal = seatTotal + carFare + bundleFare;
   const taxes = Math.round(subtotal * TAX_RATE);
   const grand = subtotal + taxes;
   const needsAddress = !!lastMile.selectedCar && !lastMile.address;
@@ -752,12 +781,34 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
   const canCheckout = selectedSeats.length > 0 && pointsReady;
 
   useEffect(() => {
-    const items: { type: 'bus' | 'lastmile'; label: string; amount: number }[] = [];
+    const items: { type: 'bus' | 'lastmile' | 'hotel' | 'package'; label: string; amount: number }[] = [];
     if (seatTotal > 0) items.push({ type: 'bus', label: `${selectedSeats.length} seat(s) on ${bus.operator}`, amount: seatTotal });
     if (carFare > 0 && lastMile.selectedCar) items.push({ type: 'lastmile', label: `Last-mile (${lastMile.selectedCar.model})`, amount: carFare });
+    if (bundle) items.push({ type: bundle.kind, label: bundle.title, amount: bundle.price });
     checkout.setItems(items as any);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seatTotal, carFare, lastMile.selectedCar]);
+  }, [seatTotal, carFare, lastMile.selectedCar, bundle]);
+
+  useEffect(() => {
+    if (selected.length === 0) {
+      clearFareHold();
+      setHoldMs(0);
+      return;
+    }
+    const existing = getFareHold();
+    const same = existing && existing.busId === bus.id && existing.seats.join() === selected.join();
+    const hold = same ? existing : startFareHold(bus.id, selected, seatTotal);
+    setHoldMs(remainingHoldMs(hold));
+    const t = window.setInterval(() => {
+      const left = remainingHoldMs(getFareHold());
+      setHoldMs(left);
+      if (left <= 0) {
+        clearFareHold();
+        setSelected([]);
+      }
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [bus.id, selected, seatTotal]);
 
   function toggle(seat: Seat) {
     if (seat.is_booked) return;
@@ -853,7 +904,19 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
     }
 
     checkout.setPnr(pnr);
-    recordBooking({ pnr, type: 'bus', operator: bus.operator, route: `${bus.from} → ${bus.to}`, date: bus.date, departure: bus.departure_time, seats: `${selectedSeats.length} seat(s)`, total: grand, created_at: new Date().toISOString() });
+    recordBooking({
+      pnr,
+      type: 'bus',
+      operator: bus.operator,
+      route: `${bus.from} → ${bus.to}`,
+      date: bus.date,
+      departure: bus.departure_time,
+      seats: `${selectedSeats.length} seat(s)`,
+      total: grand,
+      created_at: new Date().toISOString(),
+      punctuality: bus.punctuality,
+    });
+    clearFareHold();
 
     setBooking(false);
     setConfirmed(true);
@@ -931,6 +994,14 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
               <p className="mt-3 text-sm" style={{ color: 'var(--text-secondary)' }}>{bus.operator} · {bus.bus_type}</p>
               <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Seats {ticket.seats} · {bus.date} · Paid {formatINR(grand)}</p>
               {lastMile.selectedCar && lastMile.address && <p className="mt-1 text-xs text-emerald-600">Last-mile: {lastMile.selectedCar.model} from {lastMile.address.pickup_address}</p>}
+              {bundle && <p className="mt-1 text-xs text-crimson-600">Added {bundle.title} · {formatINR(bundle.price)}</p>}
+              <div className="mt-3 rounded-xl border px-3 py-2 text-left" style={{ borderColor: 'var(--border)' }}>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-crimson-600">Live trip status</p>
+                <p className="mt-1 text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>GPS tracking starts after boarding</p>
+                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  {bus.punctuality}% on-time on this service · last 7 days delayed about {Math.max(4, 100 - bus.punctuality)}% of trips (catalog sample).
+                </p>
+              </div>
             </div>
             <div className="mx-auto text-center">
               {qr && <img src={qr} alt="Boarding QR" className="mx-auto h-28 w-28 rounded-lg border bg-white p-1" />}
@@ -955,12 +1026,29 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
         </div>
       ) : (
         <>
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2">
+            <p className="text-[11px] leading-snug" style={{ color: 'var(--text-secondary)' }}>
+              Listed fare held on this device for 10 minutes. Inventory can still sell if someone else pays first.
+            </p>
+            <span className="flex shrink-0 items-center gap-1 font-mono text-sm font-bold tabular-nums text-amber-800">
+              <Timer className="h-3.5 w-3.5" /> {formatHoldClock(holdMs)}
+            </span>
+          </div>
           <h4 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Fare Summary</h4>
           <div className="mt-2 space-y-1 text-sm">
             <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>{selectedSeats.length} seat(s)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(seatTotal)}</span></div>
             {selectedSeats.length >= 4 && <div className="flex justify-between text-crimson-600"><span>Group 5% off</span><span>-{formatINR(Math.round(seatTotal * 0.05))}</span></div>}
             {bus.insurance_available && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Trip protect (optional)</span><span style={{ color: 'var(--text-muted)' }}>₹29</span></div>}
             {lastMile.selectedCar && lastMile.address && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Last-mile ({lastMile.selectedCar.model})</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(carFare)}</span></div>}
+            {bundle && (
+              <div className="flex justify-between gap-2" style={{ color: 'var(--text-secondary)' }}>
+                <span className="min-w-0 truncate">{bundle.title}</span>
+                <span className="flex shrink-0 items-center gap-2">
+                  <span style={{ color: 'var(--text-primary)' }}>{formatINR(bundle.price)}</span>
+                  <button type="button" className="text-[11px] text-crimson-600" onClick={() => setBundle(null)}>Remove</button>
+                </span>
+              </div>
+            )}
             <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Taxes (5%)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(taxes)}</span></div>
             <div className="divider my-1" />
             <div className="flex items-end justify-between gap-3">
@@ -980,6 +1068,30 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
               )}
             </div>
           </div>
+          {stayOffers.length > 0 && (
+            <div className="mt-3 rounded-xl border px-3 py-2" style={{ borderColor: 'var(--border)' }}>
+              <p className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-crimson-600"><Hotel className="h-3.5 w-3.5" /> Add stay or package</p>
+              <div className="mt-1.5 space-y-1.5">
+                {stayOffers.map((offer) => {
+                  const on = bundle?.id === offer.id;
+                  return (
+                    <button
+                      key={offer.id}
+                      type="button"
+                      onClick={() => setBundle(on ? null : offer)}
+                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ${on ? 'bg-crimson-50' : 'hover:bg-[var(--bg-raised)]'}`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold" style={{ color: 'var(--text-primary)' }}>{offer.title}</span>
+                        <span className="block truncate" style={{ color: 'var(--text-muted)' }}>{offer.detail}</span>
+                      </span>
+                      <span className="shrink-0 font-bold text-crimson-600">{on ? 'Added' : formatINR(offer.price)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {!pointsReady && (
             <p className="mt-2 text-center text-[11px]" style={{ color: 'var(--text-muted)' }}>Pay appears after boarding and dropping points are selected. Last-mile is optional.</p>
           )}

@@ -3,6 +3,9 @@ export type CancellationPolicy = 'free-until-6h' | 'partial' | 'non-refundable';
 export interface RouteStop {
   name: string;
   time: string;
+  /** Halt minutes for rest stops. */
+  halt_mins?: number;
+  note?: string;
 }
 
 export interface Bus {
@@ -35,6 +38,7 @@ export interface Bus {
   window_seats: number;
   boarding_points: RouteStop[];
   dropping_points: RouteStop[];
+  rest_stops?: RouteStop[];
   cancellation: CancellationPolicy;
   rest_stop_rating: number;
   delay_mins: number;
