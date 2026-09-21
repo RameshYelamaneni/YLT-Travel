@@ -27,6 +27,7 @@ import Footer from './components/Footer';
 import OffersForYou from './components/OffersForYou';
 import ErrorBoundary from './components/ErrorBoundary';
 import PartnerOnboardPage from './components/onboard/PartnerOnboardPage';
+import PackagesPage from './components/PackagesPage';
 
 export default function App() {
   const { view, go } = useNav();
@@ -142,6 +143,7 @@ export default function App() {
         {view.name === 'hotelDetails' && <HotelDetailsPage hotelId={view.hotelId} go={go} />}
         {view.name === 'hotelCheckout' && <HotelCheckoutPage hotelId={view.hotelId} roomId={view.roomId} go={go} />}
         {view.name === 'hotelConfirmation' && <HotelBookingConfirmationPage booking={view.booking} go={go} />}
+        {view.name === 'packages' && <PackagesPage slug={view.slug} />}
         {view.name === 'help' && <HelpPage go={go} />}
         {view.name === 'careers' && <CareersPage />}
         {view.name === 'feedback' && <FeedbackPage token={view.token} />}

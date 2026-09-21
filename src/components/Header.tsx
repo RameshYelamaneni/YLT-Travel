@@ -9,6 +9,7 @@ import { YltLogo } from './BrandLogo';
 const publicItems: { label: string; view: View }[] = [
   { label: 'Buses', view: { name: 'routes' } },
   { label: 'Hotels', view: { name: 'hotels' } },
+  { label: 'Packages', view: { name: 'packages' } },
   { label: 'Bookings', view: { name: 'bookings' } },
   { label: 'Help', view: { name: 'help' } },
   { label: 'Careers', view: { name: 'careers' } },

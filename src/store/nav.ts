@@ -27,6 +27,7 @@ export type View =
   | { name: 'hotelDetails'; hotelId: string }
   | { name: 'hotelCheckout'; hotelId: string; roomId: string }
   | { name: 'hotelConfirmation'; booking: HotelBooking }
+  | { name: 'packages'; slug?: string }
   | { name: 'help' }
   | { name: 'careers' }
   | { name: 'feedback'; token: string }
@@ -75,6 +76,10 @@ export function viewFromPath(): View {
     const type = parseOnboardKind(new URLSearchParams(window.location.search).get('type')) || (screen === 'registration' ? portal : undefined);
     return { name: 'onboard', kind: portal === 'operator' && type && screen === 'registration' ? portal : portal, screen, type };
   }
+  if (p === '/packages' || p.startsWith('/packages/')) {
+    const slug = p.replace(/^\/packages\/?/, '') || undefined;
+    return { name: 'packages', slug };
+  }
   if (p === '/help') return { name: 'help' };
   if (p === '/careers') return { name: 'careers' };
   if (p === '/bookings') return { name: 'bookings' };
@@ -103,6 +108,7 @@ export function viewFromPath(): View {
 
 function pathFromView(v: View): string | null {
   switch (v.name) {
+    case 'packages': return v.slug ? `/packages/${v.slug}` : '/packages';
     case 'help': return '/help';
     case 'careers': return '/careers';
     case 'bookings': return '/bookings';
