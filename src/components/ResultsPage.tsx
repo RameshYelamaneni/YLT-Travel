@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import type { Bus, Seat } from '../types';
 import type { View } from '../store/nav';
-import { generateSeats, generateBuses, inSlot, TIME_SLOTS } from '../data/buses';
+import { generateSeats, generateBuses, inSlot, TIME_SLOTS, catalogCrewFor } from '../data/buses';
 import { formatINR, formatDateLong, formatTime12, formatDuration } from '../lib/format';
 import { type LastMileCar } from '../data/mockCars';
 import SearchWidget from './SearchWidget';
@@ -66,7 +66,7 @@ function mapPublicBus(row: any): Bus {
   })).filter((s: Seat) => s.id) : undefined;
   const boarding = Array.isArray(row?.boarding_points) ? row.boarding_points.map((p: any) => ({ name: String(p.name || p), time: String(p.time || '') })) : [];
   const dropping = Array.isArray(row?.dropping_points) ? row.dropping_points.map((p: any) => ({ name: String(p.name || p), time: String(p.time || '') })) : [];
-  return {
+  const mapped: Bus = {
     id: String(row?.id || row?.schedule_id || ''),
     fleet_bus_id: String(row?.fleet_bus_id || row?.bus_id || ''),
     schedule_id: String(row?.schedule_id || row?.id || ''),
@@ -113,8 +113,20 @@ function mapPublicBus(row: any): Bus {
     smart_score: Number(row?.smart_score || 0),
     seats,
     photo_url: String(row?.photo_url || ''),
-    listing_source: row?.listing_source === 'catalog' ? 'catalog' : 'partner',
+    listing_source: row?.listing_source === 'catalog' ? 'catalog' : (row?.listing_source === 'partner' ? 'partner' : (String(row?.operator || '').startsWith('YLT') ? 'catalog' : 'partner')),
+    driverName: String(row?.driverName || row?.driver_name || '') || undefined,
+    driverPhoto: String(row?.driverPhoto || row?.driver_photo || '') || undefined,
+    experienceYears: Number(row?.experienceYears || row?.experience_years || 0) || undefined,
+    conductorName: String(row?.conductorName || row?.conductor_name || '') || undefined,
   };
+  const crew = catalogCrewFor(mapped.operator);
+  if (!mapped.driverName && (mapped.listing_source === 'catalog' || mapped.operator.startsWith('YLT'))) {
+    mapped.driverName = crew.driverName;
+    mapped.driverPhoto = crew.driverPhoto;
+    mapped.experienceYears = crew.experienceYears;
+    mapped.conductorName = crew.conductorName;
+  }
+  return mapped;
 }
 
 export default function ResultsPage({ from, to, date, returnDate, go, onRequireAuth }: Props) {
@@ -694,7 +706,7 @@ function BusCard({ bus, expanded, compared, onToggle, onCompare, go, onRequireAu
       )}
       {expanded && createPortal(
         <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4 lg:p-6">
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" aria-hidden />
+          <div className="absolute inset-0 bg-slate-900/35 backdrop-blur-[1px]" aria-hidden />
           <div className="relative flex h-[92dvh] max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-t-3xl bg-[var(--bg-page)] shadow-2xl animate-scale-in sm:h-[min(92dvh,56rem)] sm:rounded-3xl">
             <div className="flex shrink-0 items-center justify-between border-b bg-[var(--bg-surface)] px-4 py-3" style={{ borderColor: 'var(--border)' }}>
               <div>
@@ -982,7 +994,7 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
     <div className="flex h-full min-h-0 flex-col" style={{ borderColor: 'var(--border)' }}>
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1.2fr)_minmax(19rem,24rem)] lg:grid-rows-1">
         <div className="min-h-0 overflow-y-auto overscroll-contain p-4">
-          <SeatDeckPanel seats={seats} selected={selected} onToggle={toggle} />
+          <SeatDeckPanel bus={bus} seats={seats} selected={selected} onToggle={toggle} />
         </div>
         <div
           className="flex min-h-[13.5rem] max-h-[46vh] min-w-0 flex-col border-t lg:h-full lg:max-h-none lg:min-h-0 lg:border-l lg:border-t-0"

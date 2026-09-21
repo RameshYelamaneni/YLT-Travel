@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Accessibility, BadgeCheck, Bath, Bus as BusIcon, Camera, CheckCircle2, ChevronLeft, ChevronRight, Copy,
   DoorOpen, Droplets, HeartPulse, Lamp, Layers, MapPin, Moon, Plug, Radio, ShieldCheck,
-  Snowflake, Star, Usb, Utensils, Wifi, X,
+  Snowflake, Star, Usb, Utensils, Wifi, X, UserRound,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Bus } from '../types';
@@ -207,7 +207,7 @@ export default function BusDetailsSheet({
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-end justify-end sm:items-stretch">
-      <button type="button" className="absolute inset-0 bg-slate-900/45 backdrop-blur-[2px]" aria-label="Close bus details" onClick={onClose} />
+              <button type="button" className="absolute inset-0 bg-slate-900/35 backdrop-blur-[1px]" aria-label="Close bus details" onClick={onClose} />
       <aside className="ylt-bus-details-sheet relative flex h-[min(92dvh,100%)] w-full max-w-md flex-col rounded-t-3xl bg-[var(--bg-surface)] shadow-2xl sm:h-full sm:rounded-none">
         <header className="shrink-0 border-b px-5 py-4" style={{ borderColor: 'var(--border)' }}>
           <div className="flex items-start justify-between gap-3">
@@ -285,6 +285,33 @@ export default function BusDetailsSheet({
                 </div>
               </section>
 
+              {(bus.driverName || bus.listing_source === 'catalog') && (
+                <section className="rounded-2xl border p-4" style={{ borderColor: 'var(--border)' }}>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-crimson-600">Duty crew</p>
+                  <div className="mt-3 flex items-center gap-3">
+                    {bus.driverPhoto ? (
+                      <img src={bus.driverPhoto} alt="" className="h-16 w-16 rounded-full border object-cover" style={{ borderColor: 'var(--border)' }} />
+                    ) : (
+                      <span className="grid h-16 w-16 place-items-center rounded-full bg-crimson-600/10 text-crimson-700">
+                        <UserRound className="h-8 w-8" />
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-display text-base font-bold" style={{ color: 'var(--text-primary)' }}>{bus.driverName || 'Duty driver'}</p>
+                      <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                        {bus.experienceYears ? `${bus.experienceYears} years on this corridor` : 'Assigned for this service'}
+                      </p>
+                      {bus.conductorName && (
+                        <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>Conductor · {bus.conductorName}</p>
+                      )}
+                      {bus.listing_source === 'catalog' && (
+                        <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Catalog sample crew</p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
+
               <section>
                 <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Bus safety report</h3>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Your safety matters to us. Papers appear only after the operator uploads them.</p>
@@ -315,14 +342,18 @@ export default function BusDetailsSheet({
 
               <section>
                 <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Last 7 days — running status</h3>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Daily coach assignment is shown only when the operator shares it.</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {bus.listing_source === 'catalog' || bus.driverName
+                    ? 'Catalog sample assignments for this service (not operator-uploaded papers).'
+                    : 'Daily coach assignment is shown only when the operator shares it.'}
+                </p>
                 <ol className="mt-3 space-y-2">
                   {days.map((d) => (
                     <li key={d.date} className="flex items-center justify-between gap-3 border-b pb-2 text-sm last:border-0" style={{ borderColor: 'var(--border)' }}>
                       <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{d.label}</span>
                       {d.status === 'listed' ? (
                         <span className="text-right text-xs" style={{ color: 'var(--text-secondary)' }}>
-                          Listed service · {bus.operator}
+                          {d.note || `Listed service · ${bus.operator}`}
                         </span>
                       ) : (
                         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Awaiting operator upload</span>

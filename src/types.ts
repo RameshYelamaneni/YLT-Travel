@@ -53,6 +53,11 @@ export interface Bus {
   seats?: Seat[];
   photo_url?: string;
   listing_source?: 'partner' | 'catalog';
+  /** Catalog or operator-uploaded duty driver — shown on seat map front cabin and bus details. */
+  driverName?: string;
+  driverPhoto?: string;
+  experienceYears?: number;
+  conductorName?: string;
 }
 
 export interface Seat {

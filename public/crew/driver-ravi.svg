@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160" role="img" aria-label="Catalog driver portrait">
+  <rect width="160" height="160" rx="80" fill="#1e3a5f"/>
+  <circle cx="80" cy="62" r="28" fill="#f4d0b5"/>
+  <ellipse cx="80" cy="148" rx="48" ry="44" fill="#2d5a8a"/>
+  <path d="M52 62c2-22 14-34 28-34s26 12 28 34c-6-10-16-16-28-16s-22 6-28 16z" fill="#2a211c"/>
+  <text x="80" y="152" text-anchor="middle" fill="#fff" font-size="11" font-family="system-ui,sans-serif" font-weight="700">RT</text>
+</svg>

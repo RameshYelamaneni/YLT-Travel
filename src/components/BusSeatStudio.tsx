@@ -3,26 +3,33 @@ import type { Bus, Seat, RouteStop } from '../types';
 import { formatINR } from '../lib/format';
 import { Sparkles, TrendingDown, TrendingUp, Check } from 'lucide-react';
 
+const DRIVER_FALLBACK = '/crew/driver-placeholder.svg';
+
 export type SeatPointTab = 'boarding' | 'dropping' | 'lastmile';
 
 export function SeatDeckPanel({
   seats,
   selected,
   onToggle,
+  bus,
 }: {
   seats: Seat[];
   selected: string[];
   onToggle: (seat: Seat) => void;
+  bus?: Bus;
 }) {
   const lower = seats.filter((s) => s.deck === 'lower');
   const upper = seats.filter((s) => s.deck === 'upper');
+  const sleeper = bus?.is_sleeper ?? seats.some((s) => s.type.startsWith('sleeper'));
 
   return (
-    <div className="rounded-2xl border bg-gradient-to-b from-slate-100 to-slate-50 p-4" style={{ borderColor: 'var(--border)' }}>
-      <p className="mb-3 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">3D sleeper layout · tap a berth</p>
-      <div className="flex gap-4 overflow-x-auto pb-2" style={{ perspective: '900px' }}>
-        <Deck title="Lower" seats={lower} selected={selected} onToggle={onToggle} wheel />
-        {upper.length > 0 && <Deck title="Upper" seats={upper} selected={selected} onToggle={onToggle} />}
+    <div className="rounded-2xl border bg-gradient-to-b from-slate-50 to-white p-4" style={{ borderColor: 'var(--border)' }}>
+      <p className="mb-3 text-center text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
+        {sleeper ? 'Sleeper coach · front is the driver cabin' : 'Seater coach · front is the driver cabin'}
+      </p>
+      <div className="flex flex-wrap justify-center gap-5">
+        <Deck title="Lower" seats={lower} selected={selected} onToggle={onToggle} sleeper={sleeper} showDriver bus={bus} />
+        {upper.length > 0 && <Deck title="Upper" seats={upper} selected={selected} onToggle={onToggle} sleeper={sleeper} />}
       </div>
       <div className="mt-4 flex flex-wrap justify-center gap-3 text-[10px] text-slate-500">
         <span className="flex items-center gap-1"><span className="h-3 w-3 rounded border-2 border-emerald-400 bg-white" /> Available</span>
@@ -171,7 +178,7 @@ export default function BusSeatStudio({
 }) {
   return (
     <div className="grid gap-4 p-4 lg:grid-cols-[minmax(300px,1.15fr)_minmax(280px,0.95fr)]">
-      <SeatDeckPanel seats={seats} selected={selected} onToggle={onToggle} />
+      <SeatDeckPanel bus={bus} seats={seats} selected={selected} onToggle={onToggle} />
       <BusRouteSidebar bus={bus} board={board} drop={drop} onBoard={onBoard} onDrop={onDrop} />
     </div>
   );
@@ -256,40 +263,94 @@ function pointDateLabel(tripDate: string, departureTime: string, stopTime: strin
   return new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
-function Deck({ title, seats, selected, onToggle, wheel }: { title: string; seats: Seat[]; selected: string[]; onToggle: (s: Seat) => void; wheel?: boolean }) {
+function Deck({
+  title,
+  seats,
+  selected,
+  onToggle,
+  sleeper,
+  showDriver,
+  bus,
+}: {
+  title: string;
+  seats: Seat[];
+  selected: string[];
+  onToggle: (s: Seat) => void;
+  sleeper: boolean;
+  showDriver?: boolean;
+  bus?: Bus;
+}) {
+  const cols = sleeper ? 3 : 4;
+  const rows: Seat[][] = [];
+  for (let i = 0; i < seats.length; i += cols) rows.push(seats.slice(i, i + cols));
+  const grid = sleeper ? '1fr 1fr 0.55rem 1fr' : '1fr 1fr 0.55rem 1fr 1fr';
+
   return (
-    <div
-      className="min-w-[240px] rounded-3xl border border-slate-200 bg-white p-3 shadow-xl"
-      style={{ transform: 'rotateX(14deg) rotateY(-6deg)', transformStyle: 'preserve-3d' }}
-    >
-      <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-500">
-        {title} deck
-        {wheel && <span className="text-lg">🛞</span>}
+    <div className="w-[min(100%,17.5rem)] overflow-hidden rounded-[2rem] border-2 border-slate-300 bg-slate-100 shadow-inner">
+      <p className="bg-slate-800 py-1 text-center text-[10px] font-bold uppercase tracking-[0.18em] text-white">{title} deck</p>
+      {showDriver && <DriverCabin bus={bus} />}
+      <div className="space-y-1.5 px-3 py-3">
+        {rows.map((row, ri) => (
+          <div key={ri} className="grid items-center gap-1.5" style={{ gridTemplateColumns: grid }}>
+            {row.map((seat, ci) => {
+              const cells = [];
+              cells.push(<SeatBtn key={seat.id} seat={seat} selected={selected} onToggle={onToggle} />);
+              if (ci === 1) cells.push(<span key={`${seat.id}-aisle`} className="h-8 w-full rounded-full bg-slate-200/80" aria-hidden />);
+              return cells;
+            })}
+          </div>
+        ))}
       </div>
-      <div className="grid grid-cols-3 gap-2.5">
-        {seats.map((seat) => {
-          const on = selected.includes(seat.id);
-          return (
-            <button
-              key={seat.id}
-              onClick={() => onToggle(seat)}
-              disabled={seat.is_booked}
-              title={seat.is_ladies ? 'Ladies quota' : seat.label}
-              className={`relative flex h-16 flex-col items-center justify-end rounded-xl border-2 pb-1 text-[9px] font-semibold shadow-md transition ${
-                seat.is_booked ? 'cursor-not-allowed border-slate-200 bg-slate-200 text-slate-400' :
-                on ? 'border-emerald-600 bg-gradient-to-b from-emerald-200 to-emerald-400 text-emerald-950' :
-                seat.is_ladies ? 'border-rose-400 bg-gradient-to-b from-white to-rose-100 text-rose-800' :
-                'border-emerald-300 bg-gradient-to-b from-white to-emerald-50 text-emerald-800 hover:-translate-y-0.5'
-              }`}
-              style={{ boxShadow: '0 8px 0 rgba(15,23,42,0.08), 0 12px 18px rgba(15,23,42,0.12)' }}
-            >
-              <span className="absolute top-1 h-5 w-8 rounded-t-lg bg-white/70 shadow-inner" />
-              {!seat.is_booked && <span>{formatINR(seat.price)}</span>}
-            </button>
-          );
-        })}
+      <p className="bg-slate-200 py-1 text-center text-[9px] font-semibold uppercase tracking-wider text-slate-500">Rear</p>
+    </div>
+  );
+}
+
+function DriverCabin({ bus }: { bus?: Bus }) {
+  const name = bus?.driverName || 'Duty driver';
+  const photo = bus?.driverPhoto || DRIVER_FALLBACK;
+  const years = bus?.experienceYears;
+  const conductor = bus?.conductorName;
+
+  return (
+    <div className="relative border-b border-slate-300 bg-gradient-to-b from-slate-700 to-slate-600 px-3 py-2.5 text-white">
+      <p className="mb-1.5 text-center text-[9px] font-bold uppercase tracking-[0.22em] text-amber-300">Front of bus · driver cabin</p>
+      <div className="flex items-center gap-2.5 rounded-xl bg-black/25 px-2 py-1.5">
+        <div className="relative shrink-0">
+          <img src={photo} alt="" className="h-12 w-12 rounded-full border-2 border-amber-300 bg-slate-500 object-cover" />
+          <span className="absolute -bottom-0.5 -right-0.5 grid h-5 w-5 place-items-center rounded-full bg-slate-900 text-[11px]" title="Steering">⎈</span>
+        </div>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold leading-tight">{name}</p>
+          <p className="text-[11px] text-white/80">
+            {years ? `${years} yrs experience` : 'Assigned driver'}
+            {bus?.listing_source === 'catalog' ? ' · Catalog' : ''}
+          </p>
+          {conductor && <p className="truncate text-[10px] text-white/70">Conductor {conductor}</p>}
+        </div>
       </div>
     </div>
+  );
+}
+
+function SeatBtn({ seat, selected, onToggle }: { seat: Seat; selected: string[]; onToggle: (s: Seat) => void }) {
+  const on = selected.includes(seat.id);
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(seat)}
+      disabled={seat.is_booked}
+      title={seat.is_ladies ? `${seat.label} · Ladies quota` : seat.label}
+      className={`flex h-12 min-w-0 flex-col items-center justify-center rounded-lg border-2 text-[9px] font-semibold leading-tight transition ${
+        seat.is_booked ? 'cursor-not-allowed border-slate-200 bg-slate-200 text-slate-400' :
+        on ? 'border-emerald-600 bg-emerald-200 text-emerald-950' :
+        seat.is_ladies ? 'border-rose-400 bg-rose-50 text-rose-800' :
+        'border-emerald-300 bg-white text-emerald-800 hover:border-emerald-500'
+      }`}
+    >
+      <span>{seat.label}</span>
+      {!seat.is_booked && <span className="font-medium opacity-80">{formatINR(seat.price)}</span>}
+    </button>
   );
 }
 

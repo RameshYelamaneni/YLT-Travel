@@ -6,6 +6,43 @@ const OPERATORS = [
   { name: 'YLT Coach', type: 'A/C Seater (2+2)', ac: true, sleeper: false, volvo: false, base: 520 },
 ];
 
+/** Generic catalog crew (not real people). Photos live in /public/crew. */
+const CATALOG_CREW: Record<string, { driverName: string; driverPhoto: string; experienceYears: number; conductorName: string }> = {
+  'YLT Express': {
+    driverName: 'Ravi Teja N.',
+    driverPhoto: '/crew/driver-ravi.svg',
+    experienceYears: 12,
+    conductorName: 'Suresh Babu',
+  },
+  'YLT Premium': {
+    driverName: 'Anand Kumar P.',
+    driverPhoto: '/crew/driver-anand.svg',
+    experienceYears: 15,
+    conductorName: 'Lakshmi Narayana',
+  },
+  'YLT Coach': {
+    driverName: 'Mohan Reddy K.',
+    driverPhoto: '/crew/driver-mohan.svg',
+    experienceYears: 9,
+    conductorName: 'Praveen Rao',
+  },
+};
+
+export function catalogCrewFor(operator: string) {
+  const key = Object.keys(CATALOG_CREW).find((name) => operator.toLowerCase().includes(name.toLowerCase().replace(/^ylt\s+/i, '')) || operator.toLowerCase() === name.toLowerCase());
+  if (CATALOG_CREW[operator]) return CATALOG_CREW[operator];
+  if (key) return CATALOG_CREW[key];
+  if (/express/i.test(operator)) return CATALOG_CREW['YLT Express'];
+  if (/premium/i.test(operator)) return CATALOG_CREW['YLT Premium'];
+  if (/coach/i.test(operator)) return CATALOG_CREW['YLT Coach'];
+  return {
+    driverName: 'Duty driver',
+    driverPhoto: '/crew/driver-placeholder.svg',
+    experienceYears: 8,
+    conductorName: 'Onboard attendant',
+  };
+}
+
 const AMENITIES = [
   'WiFi', 'Charging Point', 'Water Bottle', 'Blanket', 'Reading Light', 'CCTV',
   'USB Port', 'Toilet', 'Snacks', 'Pillow', 'GPS', 'Emergency Exit',
@@ -132,6 +169,7 @@ export function generateBuses(from: string, to: string, date: string): Bus[] {
       insurance_available: true,
       smart_score: 0,
       listing_source: 'catalog' as const,
+      ...catalogCrewFor(op.name),
     };
   }).map((b) => ({
     ...b,

@@ -268,14 +268,18 @@ export function safetyItems(bus: Bus): SafetyItem[] {
   ];
 }
 
-export function runningDays(bus: Bus): { date: string; label: string; status: 'listed' | 'pending' }[] {
+export function runningDays(bus: Bus): { date: string; label: string; status: 'listed' | 'pending'; note?: string }[] {
+  const catalog = bus.listing_source === 'catalog' || Boolean(bus.driverName);
   return Array.from({ length: 7 }, (_, i) => {
     const date = shiftIsoDate(bus.date, i - 6);
-    const listed = date === bus.date;
+    const listed = catalog || date === bus.date;
     return {
       date,
       label: new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }),
       status: listed ? 'listed' : 'pending',
+      note: listed
+        ? (bus.driverName ? `${bus.driverName} on duty · ${bus.operator}` : `Listed service · ${bus.operator}`)
+        : undefined,
     };
   });
 }
