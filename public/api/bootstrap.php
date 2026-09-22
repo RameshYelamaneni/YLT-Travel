@@ -689,6 +689,9 @@ function ylt_ensure_columns($pdo) {
   ylt_add_col($pdo, 'app_settings', 'razorpay_secret', 'razorpay_secret TEXT');
   ylt_add_col($pdo, 'app_settings', 'payment_provider', "payment_provider VARCHAR(30) DEFAULT 'razorpay'");
   ylt_add_col($pdo, 'app_settings', 'payments_enabled', 'payments_enabled TINYINT(1) DEFAULT 1');
+  ylt_add_col($pdo, 'app_settings', 'ylt_saver_rupees', 'ylt_saver_rupees INT NOT NULL DEFAULT 50');
+  ylt_add_col($pdo, 'app_settings', 'price_promise_cap', 'price_promise_cap INT NOT NULL DEFAULT 150');
+  ylt_add_col($pdo, 'app_settings', 'referral_credit', 'referral_credit INT NOT NULL DEFAULT 50');
   ylt_add_col($pdo, 'directors', 'linkedin_url', 'linkedin_url TEXT');
   ylt_add_col($pdo, 'directors', 'order_index', 'order_index INT NOT NULL DEFAULT 0');
   ylt_add_col($pdo, 'offers', 'tag', "tag VARCHAR(50) NOT NULL DEFAULT 'Bus'");

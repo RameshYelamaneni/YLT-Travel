@@ -9,6 +9,8 @@ dist/
 /data/
 /public/uploads/careers/**
 !/public/uploads/careers/.htaccess
+/public/uploads/price-promise/**
+!/public/uploads/price-promise/.htaccess
 frontend/node_modules/
 frontend/.next/
 backend/bin/

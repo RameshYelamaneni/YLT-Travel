@@ -593,6 +593,13 @@ if ($method === 'POST') {
   $names = implode(',', array_map(function ($k) { return "`$k`"; }, array_keys($use)));
   $ph = implode(',', array_fill(0, count($use), '?'));
   $pdo->prepare("INSERT INTO bookings ($names) VALUES ($ph)")->execute(array_values($use));
+  if ($paid) {
+    require_once __DIR__ . '/attraction_lib.php';
+    $hook = $p;
+    $hook['payment_status'] = 'paid';
+    $hook['contact_email'] = $p['contact_email'] ?? '';
+    ylt_attraction_on_paid_booking($pdo, $hook, $pnr);
+  }
   $labels = is_array($seats) ? $seats : ylt_json_list($seats);
   $tripDate = substr((string)($p['travel_date'] ?? ''), 0, 10);
   if ($busId && $tripDate && $labels) {

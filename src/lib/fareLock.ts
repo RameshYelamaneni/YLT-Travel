@@ -33,6 +33,14 @@ export function startFareHold(busId: string, seats: string[], amount: number): F
   return hold;
 }
 
+export function setFareHoldAmount(amount: number): FareHold | null {
+  const hold = read();
+  if (!hold) return null;
+  const next = { ...hold, amount };
+  sessionStorage.setItem(KEY, JSON.stringify(next));
+  return next;
+}
+
 export function clearFareHold() {
   try { sessionStorage.removeItem(KEY); } catch { /* ignore */ }
 }

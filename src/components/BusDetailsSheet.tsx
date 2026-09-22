@@ -26,6 +26,7 @@ import {
   type BusDetailsTab,
 } from '../lib/busInsights';
 import { tripBundlesFor } from '../data/tripBundles';
+import { tripGuideSentences } from '../lib/tripGuide';
 import { useNav } from '../store/nav';
 
 export type { BusDetailsTab };
@@ -210,6 +211,7 @@ export default function BusDetailsSheet({
   const rests = bus.rest_stops ?? [];
   const bundles = tripBundlesFor(bus);
   const delayWeek = weeklyDelaySeries(bus);
+  const guide = tripGuideSentences(bus);
   const delayPct = delayWeek[0]?.delayPct ?? Math.max(4, 100 - bus.punctuality);
   const { go } = useNav();
 
@@ -294,6 +296,12 @@ export default function BusDetailsSheet({
         <div ref={scrollerRef} className="ylt-details-tab min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="space-y-8 pb-16">
             <section id="ylt-details-insights" ref={setSectionEl('insights')} className="space-y-5 scroll-mt-2">
+              <section className="rounded-2xl border border-crimson-500/25 bg-crimson-600/5 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-crimson-600">YLT trip guide</p>
+                <div className="mt-2 space-y-2 text-sm leading-snug" style={{ color: 'var(--text-secondary)' }}>
+                  {guide.map((line) => <p key={line}>{line}</p>)}
+                </div>
+              </section>
               <section className="overflow-hidden rounded-2xl border bg-gradient-to-br from-crimson-600/10 via-transparent to-violet-500/10 p-4" style={{ borderColor: 'var(--border)' }}>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-crimson-600">Service snapshot</p>
                 <div className="mt-2 flex items-end justify-between gap-3">

@@ -153,6 +153,9 @@ function ylt_public_settings($pdo) {
   if (!isset($row['bitla_api_url'])) $row['bitla_api_url'] = '';
   if (!isset($row['bitla_operator_id'])) $row['bitla_operator_id'] = '';
   $row['bitla_api_key'] = '';
+  $row['ylt_saver_rupees'] = isset($row['ylt_saver_rupees']) ? (int)$row['ylt_saver_rupees'] : 50;
+  $row['price_promise_cap'] = isset($row['price_promise_cap']) ? (int)$row['price_promise_cap'] : 150;
+  $row['referral_credit'] = isset($row['referral_credit']) ? (int)$row['referral_credit'] : 50;
   return $row;
 }
 
@@ -168,6 +171,7 @@ if ($method === 'POST' || $method === 'PUT') {
     'smtp_password','smtp_from_email','smtp_from_name','smtp_secure','email_enabled',
     'razorpay_key_id','razorpay_secret','payment_provider','payments_enabled',
     'inventory_provider','bitla_api_url','bitla_api_key','bitla_operator_id',
+    'ylt_saver_rupees','price_promise_cap','referral_credit',
   ];
   $sets = [];
   $vals = [];
@@ -179,6 +183,9 @@ if ($method === 'POST' || $method === 'PUT') {
     if ($f === 'bitla_api_key' && ($v === '' || $v === '********')) continue;
     $sets[] = "`$f`=?";
     if ($f === 'smtp_secure' || $f === 'email_enabled' || $f === 'payments_enabled') $v = $v ? 1 : 0;
+    if ($f === 'ylt_saver_rupees') $v = max(0, min(500, (int)$v));
+    if ($f === 'price_promise_cap') $v = max(0, min(2000, (int)$v));
+    if ($f === 'referral_credit') $v = max(0, min(500, (int)$v));
     $vals[] = $v;
   }
   if ($sets) {

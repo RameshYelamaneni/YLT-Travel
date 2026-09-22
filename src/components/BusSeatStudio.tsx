@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import type { Bus, Seat, RouteStop } from '../types';
 import { formatINR } from '../lib/format';
-import { Sparkles, TrendingDown, TrendingUp, Check } from 'lucide-react';
+import { quoteSaver, useSaverSettings } from '../lib/yltSaver';
+import { Check } from 'lucide-react';
 
 const DRIVER_FALLBACK = '/crew/driver-placeholder.svg';
 
@@ -58,7 +59,8 @@ export function BusRouteSidebar({
   lastMile?: ReactNode;
   lastMileDone?: boolean;
 }) {
-  const trend = aiTrend(bus);
+  const { rupees } = useSaverSettings();
+  const saver = quoteSaver(bus.price, rupees);
   const [tab, setTab] = useState<SeatPointTab>('boarding');
   const boardingDone = !!board;
   const droppingDone = !!drop;
@@ -146,13 +148,16 @@ export function BusRouteSidebar({
         </div>
       </div>
 
-      <div className="hidden shrink-0 rounded-2xl border border-navy-200 bg-gradient-to-br from-navy-50 to-gold-50 p-2.5 lg:block">
-        <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-navy-800"><Sparkles className="h-3.5 w-3.5 text-gold-600" /> AI fare insight</p>
-        <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-navy-900">
-          {trend.down ? <TrendingDown className="h-3.5 w-3.5 text-emerald-600" /> : <TrendingUp className="h-3.5 w-3.5 text-amber-600" />}
-          {trend.line}
-        </p>
-      </div>
+      {saver.discount > 0 && (
+        <div className="hidden shrink-0 rounded-2xl border border-navy-200 bg-gradient-to-br from-navy-50 to-gold-50 p-2.5 lg:block">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-navy-800">YLT Saver</p>
+          <p className="mt-1 text-xs font-semibold text-navy-900">
+            <span className="mr-1 line-through font-normal" style={{ color: 'var(--text-muted)' }}>{formatINR(saver.listed)}</span>
+            {formatINR(saver.price)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-navy-800">{saver.label}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -335,13 +340,14 @@ function DriverCabin({ bus }: { bus?: Bus }) {
 
 function SeatBtn({ seat, selected, onToggle }: { seat: Seat; selected: string[]; onToggle: (s: Seat) => void }) {
   const on = selected.includes(seat.id);
+  const saver = quoteSaver(seat.price, useSaverSettings().rupees);
   return (
     <button
       type="button"
       onClick={() => onToggle(seat)}
       disabled={seat.is_booked}
       title={seat.is_ladies ? `${seat.label} · Ladies quota` : seat.label}
-      className={`flex h-12 min-w-0 flex-col items-center justify-center rounded-lg border-2 text-[9px] font-semibold leading-tight transition ${
+      className={`flex h-14 min-w-0 flex-col items-center justify-center rounded-lg border-2 text-[9px] font-semibold leading-tight transition ${
         seat.is_booked ? 'cursor-not-allowed border-slate-200 bg-slate-200 text-slate-400' :
         on ? 'border-emerald-600 bg-emerald-200 text-emerald-950' :
         seat.is_ladies ? 'border-rose-400 bg-rose-50 text-rose-800' :
@@ -349,19 +355,10 @@ function SeatBtn({ seat, selected, onToggle }: { seat: Seat; selected: string[];
       }`}
     >
       <span>{seat.label}</span>
-      {!seat.is_booked && <span className="font-medium opacity-80">{formatINR(seat.price)}</span>}
+      {!seat.is_booked && saver.discount > 0 && (
+        <span className="font-medium line-through opacity-60">{formatINR(saver.listed)}</span>
+      )}
+      {!seat.is_booked && <span className="font-medium opacity-80">{formatINR(saver.price)}</span>}
     </button>
   );
-}
-
-function aiTrend(bus: Bus) {
-  const drop = Math.max(2, Math.round((bus.original_price - bus.price) / Math.max(bus.original_price, 1) * 100));
-  const down = bus.price <= bus.original_price * 0.95 || bus.punctuality >= 90;
-  return {
-    down,
-    line: down ? `Fares on ${bus.from} → ${bus.to} are ~${drop}% below the 14-day peak.` : `Demand is rising — tonight’s seats are pricing up vs last week.`,
-    hint: down
-      ? 'Book in this window. AI watch: similar nights fill 6–8 hours before departure.'
-      : 'If you can wait, set a price alert. Women-safe and Prime buses hold value.',
-  };
 }

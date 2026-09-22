@@ -11,6 +11,7 @@ import { useAccountPrefs } from '../store/accountPrefs';
 import { findBookingByPnr, updateBookingStatus, type BookingRecord } from './MyBookingsPage';
 import { formatINR } from '../lib/format';
 import ThemePicker from './ThemePicker';
+import ReferFriendPanel from './ReferFriendPanel';
 
 interface Props {
   open: boolean;
@@ -26,6 +27,7 @@ type Panel =
   | 'profile'
   | 'wallet'
   | 'gift'
+  | 'refer'
   | 'ticket-cancel'
   | 'ticket-reschedule'
   | 'ticket-search'
@@ -110,6 +112,7 @@ export default function AccountDrawer({ open, onClose, message, startOnLogin }: 
     : panel === 'profile' ? 'Personal information'
     : panel === 'wallet' ? 'YLT Wallet'
     : panel === 'gift' ? 'Redeem gift / offer code'
+    : panel === 'refer' ? 'Refer a friend'
     : panel === 'ticket-cancel' ? 'Cancel ticket'
     : panel === 'ticket-reschedule' ? 'Reschedule ticket'
     : panel === 'ticket-search' ? 'Search ticket'
@@ -149,6 +152,7 @@ export default function AccountDrawer({ open, onClose, message, startOnLogin }: 
               onProfile={() => requireUser('profile')}
               onWallet={() => setPanel('wallet')}
               onGift={() => setPanel('gift')}
+              onRefer={() => requireUser('refer')}
               onOffers={() => navigate('offers')}
               onHelp={() => navigate('help')}
               onCancel={() => setPanel('ticket-cancel')}
@@ -171,6 +175,7 @@ export default function AccountDrawer({ open, onClose, message, startOnLogin }: 
           {panel === 'profile' && <ProfileForm onSaved={onClose} />}
           {panel === 'wallet' && <WalletPanel />}
           {panel === 'gift' && <GiftPanel onDone={onClose} />}
+          {panel === 'refer' && <ReferFriendPanel />}
           {(panel === 'ticket-cancel' || panel === 'ticket-reschedule' || panel === 'ticket-search') && (
             <TicketPanel mode={panel} onNeedLogin={() => setPanel('login')} onDone={onClose} />
           )}
@@ -198,7 +203,7 @@ export default function AccountDrawer({ open, onClose, message, startOnLogin }: 
 }
 
 function MenuBody({
-  message, onClose, onLogin, onSignup, onBookings, onProfile, onWallet, onGift, onOffers, onHelp,
+  message, onClose, onLogin, onSignup, onBookings, onProfile, onWallet, onGift, onRefer, onOffers, onHelp,
   onCancel, onReschedule, onSearch, onLanguage, onStaff,
 }: {
   message?: string;
@@ -209,6 +214,7 @@ function MenuBody({
   onProfile: () => void;
   onWallet: () => void;
   onGift: () => void;
+  onRefer: () => void;
   onOffers: () => void;
   onHelp: () => void;
   onCancel: () => void;
@@ -254,6 +260,7 @@ function MenuBody({
       <Section label="Payments">
         <Row icon={<Wallet className="h-4 w-4" />} label="YLT Wallet" extra="₹0" onClick={onWallet} />
         <Row icon={<Gift className="h-4 w-4" />} label="Redeem gift card" onClick={onGift} />
+        <Row icon={<Gift className="h-4 w-4" />} label="Refer a friend" extra="₹50" onClick={onRefer} />
       </Section>
       <Section label="More">
         <Row icon={<Tag className="h-4 w-4" />} label="Offers" onClick={onOffers} />

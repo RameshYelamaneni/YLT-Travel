@@ -228,6 +228,307 @@ function publicView(s: PlatformSettings) {
   };
 }
 
+type AttractionBag = {
+  ylt_saver_rupees: number;
+  price_promise_cap: number;
+  referral_credit: number;
+  promises: any[];
+  referrals: any[];
+  coupons: any[];
+  redemptions: any[];
+  paidEmails: string[];
+};
+
+function attractionFile() {
+  return path.join(process.cwd(), 'data', 'attraction.json');
+}
+
+function attractionDefaults(): AttractionBag {
+  return {
+    ylt_saver_rupees: 50,
+    price_promise_cap: 150,
+    referral_credit: 50,
+    promises: [],
+    referrals: [],
+    coupons: [],
+    redemptions: [],
+    paidEmails: [],
+  };
+}
+
+function readAttraction(): AttractionBag {
+  return { ...attractionDefaults(), ...readJsonFile<Partial<AttractionBag>>(attractionFile(), {}) };
+}
+
+function writeAttraction(bag: AttractionBag) {
+  writeJsonFile(attractionFile(), bag);
+}
+
+function clampNum(n: unknown, min: number, max: number, fallback: number) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(v)));
+}
+
+function attractionPublic() {
+  const bag = readAttraction();
+  return {
+    ylt_saver_rupees: clampNum(bag.ylt_saver_rupees, 0, 500, 50),
+    price_promise_cap: clampNum(bag.price_promise_cap, 0, 2000, 150),
+    referral_credit: clampNum(bag.referral_credit, 0, 500, 50),
+  };
+}
+
+function saveAttractionSettings(patch: any) {
+  if (!patch || typeof patch !== 'object') return;
+  const bag = readAttraction();
+  if ('ylt_saver_rupees' in patch) bag.ylt_saver_rupees = clampNum(patch.ylt_saver_rupees, 0, 500, bag.ylt_saver_rupees);
+  if ('price_promise_cap' in patch) bag.price_promise_cap = clampNum(patch.price_promise_cap, 0, 2000, bag.price_promise_cap);
+  if ('referral_credit' in patch) bag.referral_credit = clampNum(patch.referral_credit, 0, 500, bag.referral_credit);
+  writeAttraction(bag);
+}
+
+function attractionCode(prefix: string, len = 6) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = prefix;
+  for (let i = 0; i < len; i++) out += alphabet[crypto.randomInt(0, alphabet.length)];
+  return out;
+}
+
+function imageExt(buf: Buffer) {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (buf.length >= 12 && buf.subarray(0, 4).toString() === 'RIFF' && buf.subarray(8, 12).toString() === 'WEBP') return 'webp';
+  return '';
+}
+
+function promiseDir() {
+  return path.join(process.cwd(), 'public', 'uploads', 'price-promise');
+}
+
+function storePromiseFile(b64: string) {
+  const raw = String(b64 || '').replace(/\s+/g, '');
+  if (!raw) return { error: 'Screenshot is required.' };
+  const buf = Buffer.from(raw, 'base64');
+  if (buf.length < 32 || buf.length > 2_000_000) return { error: 'Screenshot must be under 2 MB.' };
+  const ext = imageExt(buf);
+  if (!ext) return { error: 'Use a JPG, PNG, or WebP screenshot.' };
+  const dir = promiseDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const name = `${attractionCode('pp', 10)}.${ext}`;
+  fs.writeFileSync(path.join(dir, name), buf);
+  return { name };
+}
+
+function promiseCouponAmount(our: number, theirs: number, mode: string, capSetting: number) {
+  const diff = Math.max(0, our - theirs);
+  const under = Math.max(0, our - Math.max(0, theirs - 50));
+  let amount = mode === 'under50' ? under : diff;
+  let cap = Math.max(0, capSetting);
+  const floorCap = Math.floor(our * 0.2);
+  if (floorCap > 0) cap = Math.min(cap, floorCap);
+  if (cap < 1) return 0;
+  return Math.min(amount, cap);
+}
+
+function insertCoupon(bag: AttractionBag, amount: number, owner: string, kind: string, source: string, note: string) {
+  if (amount < 1) return '';
+  const code = attractionCode(kind === 'referral' ? 'REF' : 'PP', 6);
+  bag.coupons.unshift({ code, amount, uses_left: 1, owner_email: owner, kind, source_id: source, note, created_at: new Date().toISOString() });
+  return code;
+}
+
+function customerEmail(req: IncomingMessage) {
+  const c = staffClaims(req);
+  if (c?.email && String(c.email).includes('@')) return String(c.email).toLowerCase();
+  const raw = String(req.headers.authorization || req.headers['x-authorization'] || '').replace(/^Bearer\s+/i, '');
+  if (raw.startsWith('local.') && !raw.startsWith('local.staff.') && !raw.startsWith('local.partner.') && raw !== 'local.admin' && raw !== 'local.agent') {
+    const rest = raw.slice('local.'.length);
+    try {
+      const decoded = Buffer.from(rest, 'base64').toString('utf8');
+      if (decoded.includes('@')) return decoded.toLowerCase();
+    } catch { /* keep rest */ }
+    if (rest.includes('@')) return rest.toLowerCase();
+  }
+  return '';
+}
+
+function attractionOnPaid(p: any, pnr: string) {
+  const bag = readAttraction();
+  const email = String(p.contact_email || '').trim().toLowerCase();
+  const coupon = String(p.coupon_code || '').trim().toUpperCase();
+  if (coupon) {
+    const row = bag.coupons.find((c) => c.code === coupon);
+    const owner = String(row?.owner_email || '').toLowerCase();
+    if (row && row.uses_left > 0 && (owner === '' || owner === email)) row.uses_left -= 1;
+  }
+  const ref = String(p.referral_code || '').trim().toUpperCase();
+  if (ref && email.includes('@')) {
+    const refRow = bag.referrals.find((r) => r.code === ref);
+    const owner = String(refRow?.owner_email || '').toLowerCase();
+    const first = !bag.paidEmails.includes(email);
+    if (refRow && owner && owner !== email && first && !bag.redemptions.some((r) => r.friend_email === email)) {
+      const credit = clampNum(bag.referral_credit, 0, 500, 50);
+      const id = crypto.randomUUID();
+      const code = credit > 0 ? insertCoupon(bag, credit, owner, 'referral', id, 'Refer a friend — first paid trip') : '';
+      bag.redemptions.push({ id, code: ref, friend_email: email, pnr, coupon_code: code });
+    }
+  }
+  if (email.includes('@') && !bag.paidEmails.includes(email)) bag.paidEmails.push(email);
+  writeAttraction(bag);
+}
+
+async function handleAttraction(req: IncomingMessage, res: ServerResponse, url: string): Promise<boolean> {
+  const full = new URL(req.url || '/', 'http://local');
+  if (url.startsWith('/api/price-promise')) {
+    if (req.method === 'GET' && full.searchParams.has('file')) {
+      if (!staffIsAdmin(req)) { json(res, 403, { ok: false, error: 'admin required' }); return true; }
+      const bag = readAttraction();
+      const row = bag.promises.find((p) => p.id === full.searchParams.get('id'));
+      const name = String(row?.screenshot_file || '');
+      const fullPath = path.join(promiseDir(), path.basename(name));
+      if (!name || !fs.existsSync(fullPath)) { json(res, 404, { ok: false, error: 'Screenshot not found.' }); return true; }
+      const ext = path.extname(fullPath).slice(1);
+      const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', mime);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.end(fs.readFileSync(fullPath));
+      return true;
+    }
+    if (req.method === 'GET') {
+      if (!staffIsAdmin(req)) { json(res, 403, { ok: false, error: 'admin required' }); return true; }
+      const bag = readAttraction();
+      json(res, 200, {
+        ok: true,
+        promises: bag.promises.map((p) => ({
+          id: p.id,
+          route: p.route,
+          travel_date: p.travel_date,
+          their_price: p.their_price,
+          our_fare: p.our_fare,
+          contact_email: p.contact_email,
+          status: p.status,
+          coupon_code: p.coupon_code || '',
+          coupon_value: p.coupon_value || 0,
+          approve_mode: p.approve_mode || '',
+          reject_reason: p.reject_reason || '',
+          created_at: p.created_at,
+          has_file: Boolean(p.screenshot_file),
+        })),
+      });
+      return true;
+    }
+    if (req.method === 'POST') {
+      const p = await body(req);
+      const action = String(p.action || '').toLowerCase();
+      if (action === 'approve' || action === 'reject') {
+        if (!staffIsAdmin(req)) { json(res, 403, { ok: false, error: 'admin required' }); return true; }
+        const bag = readAttraction();
+        const row = bag.promises.find((x) => x.id === p.id);
+        if (!row) { json(res, 404, { ok: false, error: 'Proof not found.' }); return true; }
+        if (row.status !== 'pending') { json(res, 400, { ok: false, error: 'This proof is already reviewed.' }); return true; }
+        if (action === 'reject') {
+          const reason = String(p.reason || '').trim();
+          if (!reason) { json(res, 400, { ok: false, error: 'A reject reason is required.' }); return true; }
+          row.status = 'rejected';
+          row.reject_reason = reason.slice(0, 500);
+          row.reviewed_at = new Date().toISOString();
+          writeAttraction(bag);
+          json(res, 200, { ok: true, status: 'rejected', message: 'Rejected.' });
+          return true;
+        }
+        const mode = p.mode === 'under50' ? 'under50' : 'difference';
+        const amount = promiseCouponAmount(Number(row.our_fare) || 0, Number(row.their_price) || 0, mode, bag.price_promise_cap);
+        if (amount < 1) { json(res, 400, { ok: false, error: 'No coupon within the cap for this proof.' }); return true; }
+        const note = mode === 'under50' ? 'Price promise — ₹50 under claimed fare, capped' : 'Price promise — difference, capped';
+        const code = insertCoupon(bag, amount, String(row.contact_email || '').toLowerCase(), 'price_promise', row.id, note);
+        row.status = 'approved';
+        row.coupon_code = code;
+        row.coupon_value = amount;
+        row.approve_mode = mode;
+        row.reviewed_at = new Date().toISOString();
+        writeAttraction(bag);
+        json(res, 200, { ok: true, status: 'approved', coupon_code: code, coupon_value: amount, message: 'Approved. One-time coupon created.' });
+        return true;
+      }
+      const route = String(p.route || '').trim();
+      const their = Math.round(Number(p.their_price) || 0);
+      if (!route || route.length > 180) { json(res, 400, { ok: false, error: 'Enter the route.' }); return true; }
+      if (their < 1 || their > 100000) { json(res, 400, { ok: false, error: 'Enter the fare you found.' }); return true; }
+      const stored = storePromiseFile(String(p.screenshot_b64 || ''));
+      if (stored.error) { json(res, 400, { ok: false, error: stored.error }); return true; }
+      const bag = readAttraction();
+      const pending = bag.promises.filter((x) => x.status === 'pending').length;
+      if (pending >= 40) { json(res, 429, { ok: false, error: 'You already have proofs waiting for review.' }); return true; }
+      const id = crypto.randomUUID();
+      bag.promises.unshift({
+        id,
+        route,
+        travel_date: String(p.travel_date || '').slice(0, 20),
+        their_price: their,
+        our_fare: Math.max(0, Math.round(Number(p.our_fare) || 0)),
+        contact_email: String(p.contact_email || '').trim().toLowerCase(),
+        screenshot_file: stored.name,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      });
+      writeAttraction(bag);
+      json(res, 201, { ok: true, id, status: 'pending', message: "We'll review your proof." });
+      return true;
+    }
+  }
+  if (url.startsWith('/api/referral')) {
+    if (req.method === 'GET') {
+      const email = customerEmail(req);
+      if (!email.includes('@')) { json(res, 401, { ok: false, error: 'Sign in with an email to refer a friend.' }); return true; }
+      const bag = readAttraction();
+      let row = bag.referrals.find((r) => r.owner_email === email);
+      if (!row) {
+        row = { code: attractionCode('YLT', 6), owner_email: email, owner_name: staffClaims(req)?.name || '', created_at: new Date().toISOString() };
+        bag.referrals.push(row);
+        writeAttraction(bag);
+      }
+      json(res, 200, {
+        ok: true,
+        code: row.code,
+        credit: clampNum(bag.referral_credit, 0, 500, 50),
+        coupons: bag.coupons.filter((c) => String(c.owner_email).toLowerCase() === email && c.uses_left > 0),
+      });
+      return true;
+    }
+    if (req.method === 'POST') {
+      const p = await body(req);
+      const code = String(p.code || '').trim().toUpperCase();
+      const bag = readAttraction();
+      const row = bag.referrals.find((r) => r.code === code);
+      if (!row) { json(res, 200, { ok: true, valid: false, error: 'That refer code is not active.' }); return true; }
+      json(res, 200, { ok: true, valid: true, code, credit: clampNum(bag.referral_credit, 0, 500, 50) });
+      return true;
+    }
+  }
+  if (url.startsWith('/api/coupons')) {
+    if (req.method === 'POST') {
+      const p = await body(req);
+      const code = String(p.code || '').trim().toUpperCase();
+      const email = String(p.email || '').trim().toLowerCase();
+      const seat = Math.max(0, Math.round(Number(p.seat_fare) || 0));
+      const bag = readAttraction();
+      const row = bag.coupons.find((c) => c.code === code);
+      if (!row || row.uses_left < 1) { json(res, 200, { ok: false, error: 'That code is used or unknown.' }); return true; }
+      const owner = String(row.owner_email || '').toLowerCase();
+      if (owner && owner !== email) { json(res, 200, { ok: false, error: 'Sign in with the email this credit was issued to.' }); return true; }
+      let amount = Number(row.amount) || 0;
+      if (seat > 0) amount = Math.min(amount, seat);
+      if (amount < 1) { json(res, 200, { ok: false, error: 'This credit does not apply to a zero fare.' }); return true; }
+      json(res, 200, { ok: true, code: row.code, amount, note: row.note || '' });
+      return true;
+    }
+  }
+  return false;
+}
+
 function body(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -595,6 +896,9 @@ export function platformApi(rawEnv: Record<string, string>): Plugin {
         if (url === '/uploads/careers' || url.startsWith('/uploads/careers/')) {
           return json(res, 403, { ok: false, error: 'Private careers file. Sign in as Admin or HR to download.' });
         }
+        if (url === '/uploads/price-promise' || url.startsWith('/uploads/price-promise/')) {
+          return json(res, 403, { ok: false, error: 'Price proof is visible to admin only.' });
+        }
         if (!url.startsWith('/api/')) return next();
 
         const skipGo =
@@ -606,28 +910,40 @@ export function platformApi(rawEnv: Record<string, string>): Plugin {
           url === '/api/auth/employees' ||
           url.startsWith('/api/auth/employees/') ||
           url === '/api/uploads.php' ||
-          url.startsWith('/api/uploads');
+          url.startsWith('/api/uploads') ||
+          url.startsWith('/api/price-promise') ||
+          url.startsWith('/api/referral') ||
+          url.startsWith('/api/coupons');
         if (!skipGo && (await goProcessAlive())) {
           const proxied = await proxyToGo(req, res);
           if (proxied) return;
         }
 
         try {
+          if (await handleAttraction(req, res, url)) return;
           if (req.method === 'GET' && url === '/api/settings') {
-            return json(res, 200, { ...publicView(read(env)), inventory_provider: 'ylt_db', bitla_api_url: '', bitla_api_key: '', bitla_operator_id: '' });
+            const extra = attractionPublic();
+            return json(res, 200, { ...publicView(read(env)), ...extra, inventory_provider: 'ylt_db', bitla_api_url: '', bitla_api_key: '', bitla_operator_id: '' });
           }
           if (req.method === 'POST' && url === '/api/settings') {
             const patch = await body(req);
+            saveAttractionSettings(patch);
             const current = read(env);
-            write({ ...current, ...patch });
-            return json(res, 200, { ok: true });
+            const rest = { ...patch };
+            delete rest.ylt_saver_rupees;
+            delete rest.price_promise_cap;
+            delete rest.referral_credit;
+            write({ ...current, ...rest });
+            return json(res, 200, { ok: true, ...attractionPublic() });
           }
           if (req.method === 'GET' && url === '/api/bookings') {
             return json(res, 200, []);
           }
           if (req.method === 'POST' && url === '/api/bookings') {
             const p = await body(req);
-            return json(res, 200, { ok: true, pnr: p.pnr || `YLT${Date.now().toString().slice(-6)}` });
+            const pnr = p.pnr || `YLT${Date.now().toString().slice(-6)}`;
+            attractionOnPaid({ ...p, payment_status: 'paid' }, String(pnr));
+            return json(res, 200, { ok: true, pnr });
           }
           if (req.method === 'GET' && url === '/api/erp') {
             return json(res, 200, []);

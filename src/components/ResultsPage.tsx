@@ -29,7 +29,10 @@ import BusResultChips from './BusResultChips';
 import BusDetailsSheet, { type BusDetailsTab } from './BusDetailsSheet';
 import { YLT_TRUST_CHIPS } from '../lib/busInsights';
 import { tripBundlesFor, type TripBundle } from '../data/tripBundles';
-import { clearFareHold, formatHoldClock, getFareHold, remainingHoldMs, startFareHold } from '../lib/fareLock';
+import { clearFareHold, formatHoldClock, getFareHold, remainingHoldMs, setFareHoldAmount, startFareHold } from '../lib/fareLock';
+import { quoteSaver, quoteSeats, useSaverSettings } from '../lib/yltSaver';
+import { resolveCheckoutCode } from '../lib/attraction';
+import PricePromiseForm from './PricePromiseForm';
 
 interface Props {
   from: string;
@@ -161,6 +164,8 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
   const [priceCap, setPriceCap] = useState<number | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const saverRupees = useSaverSettings().rupees;
+  const shownFare = (price: number) => quoteSaver(price, saverRupees).price;
 
   useEffect(() => {
     setQuick((prev) => {
@@ -202,10 +207,10 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
   const boardingOptions = useMemo(() => [...new Set(buses.flatMap((b) => b.boarding_points.map((p) => p.name)))].sort(), [buses]);
   const droppingOptions = useMemo(() => [...new Set(buses.flatMap((b) => b.dropping_points.map((p) => p.name)))].sort(), [buses]);
   const priceBounds = useMemo(() => {
-    const ps = buses.map((b) => b.price).filter((n) => Number.isFinite(n));
+    const ps = buses.map((b) => shownFare(b.price)).filter((n) => Number.isFinite(n));
     if (!ps.length) return { min: 0, max: 0 };
     return { min: Math.min(...ps), max: Math.max(...ps) };
-  }, [buses]);
+  }, [buses, saverRupees]);
   const activePriceCap = priceCap ?? priceBounds.max;
 
   const filtered = useMemo(() => {
@@ -217,7 +222,7 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
       if (quick.has('sleeper') && !b.is_sleeper) return false;
       if (quick.has('women') && !b.women_safety) return false;
       if (quick.has('refund') && b.cancellation !== 'free-until-6h') return false;
-      if (quick.has('under-1k') && b.price > 1000) return false;
+      if (quick.has('under-1k') && shownFare(b.price) > 1000) return false;
       if (quick.has('on-time') && b.delay_mins > 0) return false;
       if (quick.has('meals') && !b.meals) return false;
       if (quick.has('accessible') && !b.accessible) return false;
@@ -239,18 +244,18 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
       if (features.has('sla') && !b.sla_verified) return false;
       if (ladyQuota && b.ladies_seats < 1) return false;
       if (windowOnly && b.window_seats < 1) return false;
-      if (b.price > activePriceCap) return false;
+      if (shownFare(b.price) > activePriceCap) return false;
       return true;
     });
     list = [...list].sort((a, b) => {
-      if (sort === 'price') return a.price - b.price;
+      if (sort === 'price') return shownFare(a.price) - shownFare(b.price);
       if (sort === 'duration') return a.duration_mins - b.duration_mins;
       if (sort === 'rating') return b.rating - a.rating;
       if (sort === 'smart') return b.smart_score - a.smart_score;
       return a.departure_time.localeCompare(b.departure_time);
     });
     return list;
-  }, [buses, quick, depSlots, arrSlots, boarding, dropping, features, ladyQuota, windowOnly, sort, activePriceCap]);
+  }, [buses, quick, depSlots, arrSlots, boarding, dropping, features, ladyQuota, windowOnly, sort, activePriceCap, saverRupees]);
 
   const cheapest = useMemo(() => buses.reduce<Bus | null>((a, b) => (!a || a.price < b.price ? a || b : b), null), [buses]);
   const fastest = useMemo(() => buses.reduce<Bus | null>((a, b) => (!a || a.duration_mins < b.duration_mins ? a || b : b), null), [buses]);
@@ -262,9 +267,9 @@ export default function ResultsPage({ from, to, date, returnDate, go, onRequireA
       const d = shiftDate(date, offset);
       if (d < new Date().toISOString().slice(0, 10)) return null;
       const isActive = d === activeDate;
-      return { date: d, count: isActive ? buses.length : 0, min: isActive && buses.length ? Math.min(...buses.map((b) => b.price)) : 0 };
+      return { date: d, count: isActive ? buses.length : 0, min: isActive && buses.length ? Math.min(...buses.map((b) => shownFare(b.price))) : 0 };
     }).filter(Boolean) as { date: string; count: number; min: number }[];
-  }, [from, to, date, activeDate, buses]);
+  }, [from, to, date, activeDate, buses, saverRupees]);
 
   const slotCounts = (which: 'dep' | 'arr') => TIME_SLOTS.map((slot) => ({
     ...slot,
@@ -621,11 +626,12 @@ function FilterGroup({ title, children }: { title: string; children: React.React
 }
 
 function SmartPick({ label, bus, onOpen }: { label: string; bus: Bus; onOpen: () => void }) {
+  const saver = quoteSaver(bus.price, useSaverSettings().rupees);
   return (
     <button onClick={onOpen} className="surface-raised px-2.5 py-1.5 text-left">
       <p className="text-[10px] font-semibold uppercase tracking-wide text-crimson-600">{label}</p>
       <p className="truncate text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{bus.operator}</p>
-      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{formatTime12(bus.departure_time)} · {formatINR(bus.price)}</p>
+      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{formatTime12(bus.departure_time)} · {formatINR(saver.price)}</p>
     </button>
   );
 }
@@ -641,7 +647,9 @@ function BusCard({ bus, expanded, compared, onToggle, onCompare, go, onRequireAu
 }) {
   const via = bus.via.length ? `Via ${bus.via.join(', ')}` : `Starts from ${bus.from}`;
   const save = bus.original_price > bus.price ? bus.original_price - bus.price : 0;
+  const saver = quoteSaver(bus.price, useSaverSettings().rupees);
   const [detailsTab, setDetailsTab] = useState<BusDetailsTab | null>(null);
+  const [promiseOpen, setPromiseOpen] = useState(false);
   return (
     <div className="max-w-full overflow-hidden rounded-lg border" style={{ borderColor: 'var(--border)' }}>
       {save > 0 && (
@@ -689,15 +697,26 @@ function BusCard({ bus, expanded, compared, onToggle, onCompare, go, onRequireAu
 
         <div className="flex shrink-0 items-center justify-between gap-3 sm:w-[9.75rem] sm:flex-col sm:items-end sm:justify-center">
           <div className="text-right">
-            {save > 0 && (
+            {saver.discount > 0 && (
+              <p className="text-[10px] leading-tight">
+                <span className="font-semibold text-crimson-600">{saver.label}</span>
+              </p>
+            )}
+            {saver.discount > 0 && (
+              <p className="text-[10px] leading-none">
+                <span className="line-through" style={{ color: 'var(--text-muted)' }}>{formatINR(saver.listed)}</span>
+              </p>
+            )}
+            {save > 0 && saver.discount === 0 && (
               <p className="text-[10px] leading-none">
                 <span className="text-emerald-600">Save {formatINR(save)}</span>{' '}
                 <span className="line-through" style={{ color: 'var(--text-muted)' }}>{formatINR(bus.original_price)}</span>
               </p>
             )}
             <p className="text-[11px] leading-tight" style={{ color: 'var(--text-muted)' }}>
-              From <span className="font-display text-xl font-bold tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatINR(bus.price)}</span>
+              From <span className="font-display text-xl font-bold tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatINR(saver.price)}</span>
             </p>
+            <button type="button" onClick={() => setPromiseOpen(true)} className="mt-1 text-[10px] font-semibold text-crimson-600">Found a lower fare?</button>
           </div>
           <div className="flex flex-col items-end">
             <button onClick={onToggle} className="rounded-md bg-crimson-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-crimson-500">{expanded ? 'Hide seats' : 'View seats'}</button>
@@ -747,6 +766,13 @@ function BusCard({ bus, expanded, compared, onToggle, onCompare, go, onRequireAu
         </div>,
         document.body,
       )}
+      <PricePromiseForm
+        open={promiseOpen}
+        onClose={() => setPromiseOpen(false)}
+        route={`${bus.from} → ${bus.to}`}
+        date={bus.date}
+        ourFare={saver.price}
+      />
     </div>
   );
 }
@@ -765,15 +791,23 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
   const [authError, setAuthError] = useState<string | null>(null);
   const [holdMs, setHoldMs] = useState(0);
   const [bundle, setBundle] = useState<TripBundle | null>(null);
+  const [codeInput, setCodeInput] = useState('');
+  const [couponCode, setCouponCode] = useState('');
+  const [couponOff, setCouponOff] = useState(0);
+  const [referralCode, setReferralCode] = useState('');
+  const [codeNote, setCodeNote] = useState<string | null>(null);
+  const [promiseOpen, setPromiseOpen] = useState(false);
+  const saverCfg = useSaverSettings();
   const stayOffers = useMemo(() => tripBundlesFor(bus), [bus]);
 
   const MAX = 4;
   const selectedSeats = selected.map((id) => seats.find((s) => s.id === id)!).filter(Boolean);
-  const seatTotal = selectedSeats.reduce((s, x) => s + x.price, 0);
+  const seatQuote = quoteSeats(selectedSeats.map((s) => s.price), saverCfg.rupees);
+  const seatPayable = Math.max(0, seatQuote.price - couponOff);
 
   const carFare = lastMile.fare;
   const bundleFare = bundle ? bundle.price : 0;
-  const subtotal = seatTotal + carFare + bundleFare;
+  const subtotal = seatPayable + carFare + bundleFare;
   const taxes = Math.round(subtotal * TAX_RATE);
   const grand = subtotal + taxes;
   const needsAddress = !!lastMile.selectedCar && !lastMile.address;
@@ -782,12 +816,12 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
 
   useEffect(() => {
     const items: { type: 'bus' | 'lastmile' | 'hotel' | 'package'; label: string; amount: number }[] = [];
-    if (seatTotal > 0) items.push({ type: 'bus', label: `${selectedSeats.length} seat(s) on ${bus.operator}`, amount: seatTotal });
+    if (seatPayable > 0) items.push({ type: 'bus', label: `${selectedSeats.length} seat(s) on ${bus.operator}`, amount: seatPayable });
     if (carFare > 0 && lastMile.selectedCar) items.push({ type: 'lastmile', label: `Last-mile (${lastMile.selectedCar.model})`, amount: carFare });
     if (bundle) items.push({ type: bundle.kind, label: bundle.title, amount: bundle.price });
     checkout.setItems(items as any);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seatTotal, carFare, lastMile.selectedCar, bundle]);
+  }, [seatPayable, carFare, lastMile.selectedCar, bundle]);
 
   useEffect(() => {
     if (selected.length === 0) {
@@ -797,7 +831,7 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
     }
     const existing = getFareHold();
     const same = existing && existing.busId === bus.id && existing.seats.join() === selected.join();
-    const hold = same ? existing : startFareHold(bus.id, selected, seatTotal);
+    const hold = same ? (setFareHoldAmount(seatPayable) ?? existing) : startFareHold(bus.id, selected, seatPayable);
     setHoldMs(remainingHoldMs(hold));
     const t = window.setInterval(() => {
       const left = remainingHoldMs(getFareHold());
@@ -808,10 +842,13 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
       }
     }, 1000);
     return () => window.clearInterval(t);
-  }, [bus.id, selected, seatTotal]);
+  }, [bus.id, selected, seatPayable]);
 
   function toggle(seat: Seat) {
     if (seat.is_booked) return;
+    if (couponOff > 0) setCodeNote(null);
+    setCouponCode('');
+    setCouponOff(0);
     setSelected((prev) => prev.includes(seat.id) ? prev.filter((id) => id !== seat.id) : prev.length < MAX ? [...prev, seat.id] : prev);
   }
 
@@ -834,6 +871,25 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
       lastMile.setFare(fare);
     }
     setAddressOpen(false);
+  }
+
+  async function applyCode() {
+    const res = await resolveCheckoutCode(codeInput, user?.email || '', seatQuote.price);
+    if (res.kind === 'coupon') {
+      setReferralCode('');
+      setCouponCode(res.code);
+      setCouponOff(res.amount);
+      setCodeNote(`${res.code} takes ${formatINR(res.amount)} off before you pay.`);
+      return;
+    }
+    if (res.kind === 'referral') {
+      setCouponCode('');
+      setCouponOff(0);
+      setReferralCode(res.code);
+      setCodeNote(`Code noted. Your friend receives ${formatINR(res.credit)} YLT Saver credit after this paid trip.`);
+      return;
+    }
+    setCodeNote(res.error);
   }
 
   function book() {
@@ -888,6 +944,8 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
           contact_email: contactEmail,
           contact_phone: '',
           total_amount: grand,
+          coupon_code: couponCode,
+          referral_code: referralCode,
           user_identifier: user?.email ?? null,
           user_type: 'customer',
           boarding_point: board || lastMile.address?.pickup_address || null,
@@ -929,7 +987,7 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
       departure: bus.departure_time,
       seats: selectedSeats.map((s) => s.label).join(', '),
       passengers: user?.name,
-      amount: seatTotal,
+      amount: seatPayable,
       taxes,
       total: grand,
       contactEmail: user?.email,
@@ -951,7 +1009,7 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
       departure: bus.departure_time,
       seats: selectedSeats.map((s) => s.label).join(', ') || `${selectedSeats.length} seat(s)`,
       passengers: user?.name,
-      amount: seatTotal,
+      amount: seatPayable,
       taxes,
       total: grand,
       contactEmail: user?.email,
@@ -1036,8 +1094,22 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
           </div>
           <h4 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Fare Summary</h4>
           <div className="mt-2 space-y-1 text-sm">
-            <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>{selectedSeats.length} seat(s)</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(seatTotal)}</span></div>
-            {selectedSeats.length >= 4 && <div className="flex justify-between text-crimson-600"><span>Group 5% off</span><span>-{formatINR(Math.round(seatTotal * 0.05))}</span></div>}
+            <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}>
+              <span>{selectedSeats.length} seat(s) listed</span>
+              <span className={seatQuote.discount > 0 ? 'line-through' : ''} style={{ color: seatQuote.discount > 0 ? 'var(--text-muted)' : 'var(--text-primary)' }}>{formatINR(seatQuote.listed)}</span>
+            </div>
+            {seatQuote.discount > 0 && (
+              <div className="flex justify-between text-crimson-600">
+                <span>{seatQuote.label}</span>
+                <span>-{formatINR(seatQuote.discount)}</span>
+              </div>
+            )}
+            {couponOff > 0 && (
+              <div className="flex justify-between text-crimson-600">
+                <span>Saver credit {couponCode}</span>
+                <span>-{formatINR(couponOff)}</span>
+              </div>
+            )}
             {bus.insurance_available && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Trip protect (optional)</span><span style={{ color: 'var(--text-muted)' }}>₹29</span></div>}
             {lastMile.selectedCar && lastMile.address && <div className="flex justify-between" style={{ color: 'var(--text-secondary)' }}><span>Last-mile ({lastMile.selectedCar.model})</span><span style={{ color: 'var(--text-primary)' }}>{formatINR(carFare)}</span></div>}
             {bundle && (
@@ -1097,6 +1169,18 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
           )}
           {needsAddress && pointsReady && <p className="mt-2 text-xs text-amber-600"><MapPin className="inline h-3 w-3" /> Enter last-mile address, or skip the car to pay</p>}
           {authError && <p className="mt-2 text-xs text-red-500">{authError}</p>}
+          <div className="mt-3 flex gap-2">
+            <input
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+              placeholder="Refer code or saver credit"
+              className="min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-xs uppercase"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', background: 'var(--bg-input)' }}
+            />
+            <button type="button" onClick={() => { void applyCode(); }} className="shrink-0 rounded-lg border px-2 text-[11px] font-semibold" style={{ borderColor: 'var(--border)' }}>Apply</button>
+          </div>
+          {codeNote && <p className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>{codeNote}</p>}
+          <button type="button" onClick={() => setPromiseOpen(true)} className="mt-2 text-[11px] font-semibold text-crimson-600">Found a lower fare?</button>
         </>
       )}
     </div>
@@ -1136,6 +1220,13 @@ function SeatMap({ bus, go, onRequireAuth }: { bus: Bus; go: (v: View) => void; 
       </div>
 
       {addressOpen && <AddressInputModal open={addressOpen} onClose={() => setAddressOpen(false)} car={lastMile.selectedCar} onConfirm={confirmAddress} />}
+      <PricePromiseForm
+        open={promiseOpen}
+        onClose={() => setPromiseOpen(false)}
+        route={`${bus.from} → ${bus.to}`}
+        date={bus.date}
+        ourFare={seatQuote.price || quoteSaver(bus.price, saverCfg.rupees).price}
+      />
     </div>
   );
 }

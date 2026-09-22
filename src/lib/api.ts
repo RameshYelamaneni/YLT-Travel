@@ -50,6 +50,15 @@ export function livePhpUrl(path: string): string {
   if (p.startsWith('/api/offers')) {
     return mergeQuery('/api/offers.php', raw);
   }
+  if (p.startsWith('/api/price-promise')) {
+    return mergeQuery('/api/attraction.php', raw, { resource: 'price-promise' });
+  }
+  if (p.startsWith('/api/referral')) {
+    return mergeQuery('/api/attraction.php', raw, { resource: 'referral' });
+  }
+  if (p.startsWith('/api/coupons')) {
+    return mergeQuery('/api/attraction.php', raw, { resource: 'coupons' });
+  }
   if (p.startsWith('/api/bookings')) {
     return mergeQuery('/api/bookings.php', raw);
   }

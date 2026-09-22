@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Plus, Trash2, Pencil, Save, X, Image as ImageIcon, AlertCircle, Loader2, Check,
-  Upload, User as UserIcon, Mail, Shield, Users, Send, Briefcase, Edit2, BadgeCheck,
+  Upload, User as UserIcon, Mail, Shield, Users, Send, Briefcase, Edit2, BadgeCheck, Tag,
   FolderOpen, Download, FileText, Folder, File as FileIcon, KeyRound, Copy, RefreshCw, CreditCard, Boxes, Headphones,
 } from 'lucide-react';
 import type { Director } from '../types';
@@ -13,10 +13,11 @@ import LoginModal from './LoginModal';
 import { apiFetch } from '../lib/api';
 import { Drawer } from './erp/ui';
 import KycQueueTab from './admin/KycQueueTab';
+import PricePromiseTab from './admin/PricePromiseTab';
 
 type Draft = { id: string; name: string; role: string; bio: string; image_url: string | null; linkedin_url: string | null; order_index: number };
 
-type Tab = 'directors' | 'offers' | 'email' | 'payments' | 'inventory' | 'partnerApps' | 'agentApps' | 'insuranceApps' | 'employees' | 'templates' | 'files' | 'care' | 'careers';
+type Tab = 'directors' | 'offers' | 'promises' | 'email' | 'payments' | 'inventory' | 'partnerApps' | 'agentApps' | 'insuranceApps' | 'employees' | 'templates' | 'files' | 'care' | 'careers';
 
 function staffRoleOf(role?: string) {
   return String(role || 'admin').toLowerCase();
@@ -105,6 +106,7 @@ export default function AdminPanel() {
             <>
           <SideBtn active={tab === 'directors'} onClick={() => setTab('directors')} icon={<Users className="h-4 w-4" />} label="Directors" />
           <SideBtn active={tab === 'offers'} onClick={() => setTab('offers')} icon={<BadgeCheck className="h-4 w-4" />} label="Offers" />
+          <SideBtn active={tab === 'promises'} onClick={() => setTab('promises')} icon={<Tag className="h-4 w-4" />} label="Price promises" />
           <SideBtn active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-4 w-4" />} label="Email & OTP" />
           <SideBtn active={tab === 'payments'} onClick={() => setTab('payments')} icon={<CreditCard className="h-4 w-4" />} label="Payments" />
           <SideBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Boxes className="h-4 w-4" />} label="Inventory" />
@@ -135,6 +137,7 @@ export default function AdminPanel() {
             <>
           <TabBtn active={tab === 'directors'} onClick={() => setTab('directors')} icon={<Users className="h-4 w-4" />} label="Directors" />
           <TabBtn active={tab === 'offers'} onClick={() => setTab('offers')} icon={<BadgeCheck className="h-4 w-4" />} label="Offers" />
+          <TabBtn active={tab === 'promises'} onClick={() => setTab('promises')} icon={<Tag className="h-4 w-4" />} label="Promises" />
           <TabBtn active={tab === 'email'} onClick={() => setTab('email')} icon={<Mail className="h-4 w-4" />} label="Email" />
           <TabBtn active={tab === 'payments'} onClick={() => setTab('payments')} icon={<CreditCard className="h-4 w-4" />} label="Payments" />
           <TabBtn active={tab === 'inventory'} onClick={() => setTab('inventory')} icon={<Boxes className="h-4 w-4" />} label="Inventory" />
@@ -159,6 +162,7 @@ export default function AdminPanel() {
         <div className="container-fluid py-6">
           {tab === 'directors' && <DirectorsTab />}
           {tab === 'offers' && <OffersTab />}
+          {tab === 'promises' && <PricePromiseTab />}
           {tab === 'email' && <EmailTab />}
           {tab === 'payments' && <PaymentsTab />}
           {tab === 'inventory' && <InventoryTab />}
